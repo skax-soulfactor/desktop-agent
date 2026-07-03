@@ -41,3 +41,16 @@ export function saveSession(data: SessionData): void {
 export function deleteSession(id: string): void {
   deleteFile(`sessions/${id}.json`)
 }
+
+/**
+ * 읽기-수정-쓰기를 한 번에 수행하는 append.
+ * 메인 턴과 백그라운드 작업이 같은 세션에 동시에 기록해도 서로의 변경을 덮어쓰지 않도록,
+ * 항상 디스크의 최신 상태를 다시 읽어 덧붙인다 (동기 실행이라 원자적).
+ */
+export function appendToSession(id: string, items: ChatItem[], messages: ModelMessage[]): void {
+  const fresh = getSession(id)
+  if (!fresh) return
+  fresh.items.push(...items)
+  fresh.messages.push(...messages)
+  saveSession(fresh)
+}

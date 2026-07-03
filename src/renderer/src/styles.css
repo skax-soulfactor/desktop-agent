@@ -84,6 +84,16 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 
 .memcard { align-self: center; font-size: 12px; color: var(--text-dim); background: var(--panel); border: 1px dashed var(--border); border-radius: 10px; padding: 6px 12px; }
 
+.taskbar { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 8% 0; }
+.taskchip {
+  display: flex; align-items: center; gap: 8px; font-size: 13px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 6px 12px;
+}
+.taskchip .detail { color: var(--text-dim); }
+.taskchip .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+.taskchip .chip-cancel { border: none; background: none; color: var(--danger); padding: 0 2px; font-size: 12px; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
 .composer { display: flex; gap: 8px; padding: 14px 8%; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 160px; }
 

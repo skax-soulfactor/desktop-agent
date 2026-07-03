@@ -3,12 +3,17 @@ import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { ChatEvent, ChatItem } from '@shared/types'
 import { getActiveModel } from '../llm/providers'
+import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
-import { getSession, saveSession } from './sessions'
+import { getSession, saveSession, appendToSession } from './sessions'
+import { taskTools, listTasks } from './tasks'
 
 const MAX_STEPS = 25
+
+/** 메인(대화) 에이전트가 직접 쓸 수 있는 도구 — 빠른 읽기 전용. 나머지는 위임 */
+const MAIN_AGENT_TOOLS = ['fs_read', 'fs_list']
 
 const activeTurns = new Map<string, AbortController>()
 
@@ -21,32 +26,42 @@ export function isTurnRunning(sessionId: string): boolean {
   return activeTurns.has(sessionId)
 }
 
-/** API 오류를 사용자가 조치할 수 있는 메시지로 변환 */
-function describeError(e: unknown): string {
-  const err = e as { message?: string; statusCode?: number; url?: string; responseBody?: string }
-  const status = err.statusCode
-  if (status === 404) {
-    return `LLM API 404 (Not Found): 모델 ID 또는 Base URL이 잘못되었을 가능성이 큽니다. ` +
-      `설정에서 확인하세요. (요청 주소: ${err.url ?? '알 수 없음'})`
+function baseSystemPrompt(sessionId: string): string {
+  const lines = [
+    '너는 사용자의 데스크톱에서 동작하는 협업 에이전트의 메인(대화) 에이전트다. 사용자와의 대화가 최우선이다.',
+    `실행 환경: ${platform()} / 홈 디렉토리: ${homedir()}`,
+    '',
+    '## 작업 위임 규칙',
+    '- 너가 직접 쓸 수 있는 도구는 빠른 읽기 전용(fs_read, fs_list)뿐이다.',
+    '- 파일 생성·수정, 셸 실행, 여러 단계가 필요하거나 오래 걸리는 작업은 반드시 delegate_task로 백그라운드 서브 에이전트에 위임하라.',
+    '- 위임 지시(instruction)는 서브 에이전트가 단독으로 수행할 수 있게 자기완결적으로 작성하라.',
+    '- 위임 직후 사용자에게 무엇을 시작했는지 짧게 알리고 턴을 끝내라. 작업 완료를 기다리지 마라.',
+    '- 사용자가 작업 취소를 원하면 list_tasks로 확인 후 cancel_task를 호출하라.',
+    '- "[작업 알림"으로 시작하는 메시지는 사용자가 아닌 시스템이 보낸 작업 상태 알림이다. 사용자 발언으로 취급하지 마라.',
+    '',
+    '모든 도구 호출은 사용자의 승인을 거친다. 거부되면 이유를 존중하고 다른 방법을 제안하라.',
+    '응답은 사용자의 언어로 한다.'
+  ]
+
+  const running = listTasks(sessionId).filter((t) => t.status === 'running')
+  if (running.length > 0) {
+    lines.push('', '## 현재 진행 중인 백그라운드 작업')
+    for (const t of running) {
+      lines.push(`- taskId=${t.id} "${t.title}"${t.detail ? ` (최근 활동: ${t.detail})` : ''}`)
+    }
   }
-  if (status === 401 || status === 403) {
-    return `LLM API 인증 실패 (${status}): API 키를 확인하세요.`
-  }
-  if (status === 429) {
-    return 'LLM API 사용량 한도 초과 (429): 잠시 후 다시 시도하세요.'
-  }
-  const detail = err.responseBody ? ` — ${String(err.responseBody).slice(0, 300)}` : ''
-  return (err.message ?? String(e)) + detail
+  return lines.join('\n')
 }
 
-function baseSystemPrompt(): string {
-  return [
-    '너는 사용자의 데스크톱에서 동작하는 협업 에이전트다. 도구(파일, 셸)를 사용해 사용자의 요청을 처리한다.',
-    `실행 환경: ${platform()} / 홈 디렉토리: ${homedir()}`,
-    '모든 도구 호출은 사용자의 승인을 거친다. 승인이 거부되면(denied) 이유를 존중하고 다른 방법을 제안하거나 사용자에게 물어라.',
-    '파괴적이거나 되돌리기 어려운 작업은 실행 전에 무엇을 할지 설명하라.',
-    '응답은 사용자의 언어로 한다.'
-  ].join('\n')
+/** 게이트 도구는 정의에서, 작업 관리 도구는 이름별 규칙으로 요약 */
+function summarizeCall(toolName: string, input: unknown): string {
+  const def = toolDefByName(toolName)
+  if (def) return def.describeCall(input as never)
+  const i = (input ?? {}) as Record<string, unknown>
+  if (toolName === 'delegate_task') return `작업 위임: ${String(i.title ?? '')}`
+  if (toolName === 'cancel_task') return `작업 취소 요청: ${String(i.taskId ?? '')}`
+  if (toolName === 'list_tasks') return '작업 목록 조회'
+  return toolName
 }
 
 export async function runTurn(win: BrowserWindow, sessionId: string, userText: string): Promise<void> {
@@ -66,11 +81,15 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
   const ctx: TurnContext = { sessionId, win, failures: [] }
   const transcript: string[] = [`사용자: ${userText}`]
 
+  // 사용자 메시지를 먼저 저장하고, 이후에는 append만 한다
+  // (백그라운드 작업이 같은 세션에 동시 기록해도 서로 덮어쓰지 않도록)
   session.items.push({ kind: 'user', text: userText })
   session.messages.push({ role: 'user', content: userText })
   if (session.meta.title === '새 대화') {
     session.meta.title = userText.slice(0, 40)
   }
+  saveSession(session)
+  const messagesForModel = [...session.messages]
 
   send({ type: 'turn-start' })
 
@@ -80,13 +99,14 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
   try {
     const { model } = getActiveModel()
     const memoryContext = buildMemoryContext(userText)
-    const system = memoryContext ? `${baseSystemPrompt()}\n\n${memoryContext}` : baseSystemPrompt()
+    const base = baseSystemPrompt(sessionId)
+    const system = memoryContext ? `${base}\n\n${memoryContext}` : base
 
     const result = streamText({
       model,
       system,
-      messages: session.messages,
-      tools: buildTools(ctx),
+      messages: messagesForModel,
+      tools: { ...buildTools(ctx, MAIN_AGENT_TOOLS), ...taskTools(win, sessionId) },
       stopWhen: stepCountIs(MAX_STEPS),
       abortSignal: abort.signal
     })
@@ -97,8 +117,7 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
         assistantText += delta
         send({ type: 'text-delta', text: delta })
       } else if (part.type === 'tool-call') {
-        const def = toolDefByName(part.toolName)
-        const summary = def ? def.describeCall(part.input as never) : part.toolName
+        const summary = summarizeCall(part.toolName, part.input)
         const item: ChatItem & { kind: 'tool' } = {
           kind: 'tool',
           toolCallId: part.toolCallId,
@@ -128,40 +147,33 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
       }
     }
 
-    // 히스토리 반영
+    // 히스토리 반영 — 디스크 최신 상태에 append (동시 기록 안전)
     const response = await result.response
-    session.messages.push(...response.messages)
-    // 표시용 아이템: 텍스트와 도구 카드를 순서대로 (간이 정렬 — 도구 먼저, 최종 텍스트 마지막)
-    for (const item of toolItems.values()) session.items.push(item)
+    const newItems: ChatItem[] = [...toolItems.values()]
     if (assistantText) {
-      session.items.push({ kind: 'assistant', text: assistantText })
+      newItems.push({ kind: 'assistant', text: assistantText })
       transcript.push(`에이전트: ${assistantText}`)
     }
-    saveSession(session)
-    // 정상 종료 시에도 방어적으로 미해결 도구를 확정 (SDK가 보통 모든 결과를 채우지만 스텝 한도 등 대비)
+    appendToSession(sessionId, newItems, response.messages)
+    // 정상 종료 시에도 방어적으로 미해결 도구를 확정 (스텝 한도 등 대비)
     send({ type: 'turn-end', unresolvedToolCallIds: resolveDanglingTools(toolItems) })
 
     // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다
     void extractMemories(sessionId, transcript.join('\n'), ctx.failures)
       .then((ops) => {
         if (ops.length > 0) {
-          const fresh = getSession(sessionId)
-          if (fresh) {
-            fresh.items.push({ kind: 'memory', ops })
-            saveSession(fresh)
-          }
+          appendToSession(sessionId, [{ kind: 'memory', ops }], [])
           send({ type: 'memory-saved', ops })
         }
       })
       .catch(() => {})
   } catch (e) {
     const aborted = abort.signal.aborted
-    // 오류·중단으로 끝난 턴: 아직 '실행 중'인 도구 카드를 '중단됨'으로 확정한다.
-    // 이렇게 하지 않으면 렌더러에서 스피너가 영원히 도는 것처럼 보인다.
+    // 오류·중단으로 끝난 턴: 아직 '실행 중'인 도구 카드를 '중단됨'으로 확정한다
     const unresolved = resolveDanglingTools(toolItems)
-    for (const item of toolItems.values()) session.items.push(item)
-    if (assistantText) session.items.push({ kind: 'assistant', text: assistantText })
-    saveSession(session)
+    const newItems: ChatItem[] = [...toolItems.values()]
+    if (assistantText) newItems.push({ kind: 'assistant', text: assistantText })
+    appendToSession(sessionId, newItems, [])
     send({
       type: 'turn-end',
       error: aborted ? '사용자가 중지했습니다.' : describeError(e),

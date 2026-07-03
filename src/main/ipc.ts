@@ -1,6 +1,7 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { ApprovalDecision, ProviderConfig } from '@shared/types'
 import { runTurn, abortTurn, isTurnRunning } from './agent/loop'
+import { listTasks, cancelTask } from './agent/tasks'
 import { createSession, deleteSession, getSession, listSessions } from './agent/sessions'
 import { respondToApproval } from './permissions/gateway'
 import { listRules, deleteRule } from './permissions/policies'
@@ -15,6 +16,10 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   })
   ipcMain.handle('chat:abort', (_e, sessionId: string) => abortTurn(sessionId))
   ipcMain.handle('chat:isRunning', (_e, sessionId: string) => isTurnRunning(sessionId))
+
+  // 백그라운드 작업 (서브 에이전트)
+  ipcMain.handle('tasks:list', (_e, sessionId?: string) => listTasks(sessionId))
+  ipcMain.handle('tasks:cancel', (_e, taskId: string) => cancelTask(taskId))
 
   // 승인
   ipcMain.handle('approval:respond', (_e, requestId: string, decision: ApprovalDecision) =>

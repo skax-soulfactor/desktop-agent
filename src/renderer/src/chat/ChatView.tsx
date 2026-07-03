@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChatItem, SessionMeta } from '@shared/types'
+import type { ChatItem, SessionMeta, TaskInfo } from '@shared/types'
 
 export default function ChatView(): JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([])
@@ -7,6 +7,7 @@ export default function ChatView(): JSX.Element {
   const [items, setItems] = useState<ChatItem[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [runningTasks, setRunningTasks] = useState<TaskInfo[]>([])
   const [error, setError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<string | null>(null)
@@ -66,6 +67,23 @@ export default function ChatView(): JSX.Element {
         )
       } else if (e.type === 'memory-saved') {
         setItems((prev) => [...prev, { kind: 'memory', ops: e.ops }])
+      } else if (e.type === 'task-update') {
+        const t = e.task
+        if (t.status === 'running') {
+          // 진행 중: 작업 표시줄에 추가/갱신
+          setRunningTasks((prev) => {
+            const idx = prev.findIndex((x) => x.id === t.id)
+            if (idx >= 0) return prev.map((x, i) => (i === idx ? t : x))
+            return [...prev, t]
+          })
+        } else {
+          // 종료: 표시줄에서 제거하고 결과 카드를 대화에 추가
+          setRunningTasks((prev) => prev.filter((x) => x.id !== t.id))
+          setItems((prev) => [
+            ...prev,
+            { kind: 'task', taskId: t.id, title: t.title, status: t.status, result: t.result }
+          ])
+        }
       } else if (e.type === 'turn-end') {
         setBusy(false)
         if (e.error) setError(e.error)
@@ -97,6 +115,7 @@ export default function ChatView(): JSX.Element {
       setError(null)
       // 버튼 상태를 이벤트가 아닌 실제 실행 여부로 동기화 (세션 전환·이벤트 누락 시 desync 방지)
       setBusy(await window.api.chatIsRunning(id))
+      setRunningTasks((await window.api.listTasks(id)).filter((t) => t.status === 'running'))
     }
   }
 
@@ -106,6 +125,7 @@ export default function ChatView(): JSX.Element {
     setActiveId(s.meta.id)
     setItems([])
     setBusy(false)
+    setRunningTasks([])
   }
 
   const removeSession = async (id: string): Promise<void> => {
@@ -164,6 +184,22 @@ export default function ChatView(): JSX.Element {
                   기억함: {it.ops.map((o) => `${o.title}`).join(' · ')}
                 </div>
               )
+            if (it.kind === 'task')
+              return (
+                <div key={i} className="toolcard">
+                  <div className="head">
+                    <span
+                      className={`badge ${
+                        it.status === 'done' ? 'done' : it.status === 'cancelled' ? 'aborted' : 'error'
+                      }`}
+                    >
+                      {it.status === 'done' ? '작업 완료' : it.status === 'cancelled' ? '작업 취소됨' : '작업 실패'}
+                    </span>
+                    <span>{it.title}</span>
+                  </div>
+                  {it.result && <pre>{it.result}</pre>}
+                </div>
+              )
             return (
               <div key={i} className="toolcard">
                 <div className="head">
@@ -186,6 +222,22 @@ export default function ChatView(): JSX.Element {
           })}
           <div ref={bottomRef} />
         </div>
+        {runningTasks.length > 0 && (
+          <div className="taskbar">
+            {runningTasks.map((t) => (
+              <div key={t.id} className="taskchip">
+                <span className="pulse" />
+                <span>
+                  {t.title}
+                  {t.detail && <span className="detail"> — {t.detail}</span>}
+                </span>
+                <button className="chip-cancel" onClick={() => void window.api.cancelTask(t.id)}>
+                  취소
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {error && <div className="error-banner">{error}</div>}
         <div className="composer">
           <textarea

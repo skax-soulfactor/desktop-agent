@@ -7,7 +7,8 @@ import type {
   MemoryEntry,
   PermissionRule,
   ProviderConfig,
-  SessionMeta
+  SessionMeta,
+  TaskInfo
 } from '@shared/types'
 import type { DesktopAgentApi, SessionDataDto } from '@shared/api'
 
@@ -18,6 +19,9 @@ const api: DesktopAgentApi = {
   chatAbort: (sessionId: string): Promise<void> => ipcRenderer.invoke('chat:abort', sessionId),
   chatIsRunning: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('chat:isRunning', sessionId),
+
+  listTasks: (sessionId?: string): Promise<TaskInfo[]> => ipcRenderer.invoke('tasks:list', sessionId),
+  cancelTask: (taskId: string): Promise<boolean> => ipcRenderer.invoke('tasks:cancel', taskId),
   onChatEvent: (cb: (e: ChatEvent & { sessionId: string }) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, ev: ChatEvent & { sessionId: string }): void => cb(ev)
     ipcRenderer.on('chat:event', handler)

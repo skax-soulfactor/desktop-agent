@@ -18,10 +18,14 @@ export interface TurnContext {
   failures: FailureSignal[]
 }
 
-/** 모든 도구 실행을 Permission Gateway 통과 후로 강제하는 래퍼 */
-export function buildTools(ctx: TurnContext): ToolSet {
+/**
+ * 모든 도구 실행을 Permission Gateway 통과 후로 강제하는 래퍼.
+ * only를 주면 해당 이름의 도구만 노출 (메인 에이전트는 읽기 도구만, 워커는 전부).
+ */
+export function buildTools(ctx: TurnContext, only?: string[]): ToolSet {
   const tools: ToolSet = {}
-  for (const def of allToolDefs) {
+  const defs = only ? allToolDefs.filter((d) => only.includes(d.name)) : allToolDefs
+  for (const def of defs) {
     tools[def.name] = tool({
       description: def.description,
       inputSchema: def.inputSchema,

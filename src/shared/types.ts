@@ -31,6 +31,23 @@ export type ChatItem =
       output?: string
     }
   | { kind: 'memory'; ops: MemoryOpSummary[] }
+  | { kind: 'task'; taskId: string; title: string; status: TaskStatus; result?: string }
+
+export type TaskStatus = 'running' | 'done' | 'failed' | 'cancelled'
+
+/** 백그라운드 서브 에이전트(워커)가 수행하는 위임 작업 */
+export interface TaskInfo {
+  id: string
+  sessionId: string
+  title: string
+  status: TaskStatus
+  /** 진행 중 마지막 활동 (예: 실행 중인 도구 요약) */
+  detail?: string
+  /** 종료 시 결과 요약 */
+  result?: string
+  createdAt: string
+  finishedAt?: string
+}
 
 export interface MemoryOpSummary {
   op: 'create' | 'update' | 'archive'
@@ -44,6 +61,7 @@ export type ChatEvent =
   | { type: 'tool-call'; toolCallId: string; toolName: string; summary: string }
   | { type: 'tool-result'; toolCallId: string; status: 'done' | 'denied' | 'error'; output: string }
   | { type: 'memory-saved'; ops: MemoryOpSummary[] }
+  | { type: 'task-update'; task: TaskInfo }
   /** unresolvedToolCallIds: 턴 종료 시점에 아직 결과가 없는 도구 호출 (중단됨으로 확정) */
   | { type: 'turn-end'; error?: string; unresolvedToolCallIds: string[] }
 
