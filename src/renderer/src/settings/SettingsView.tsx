@@ -128,12 +128,20 @@ export default function SettingsView(): JSX.Element {
           onChange={(e) => setForm({ ...form, label: e.target.value })}
         />
         <span>모델</span>
-        <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
+        <input
+          placeholder={form.type === 'openai-compatible' ? '모델 ID (예: OpenRouter는 vendor/model 형식)' : ''}
+          value={form.model}
+          onChange={(e) => setForm({ ...form, model: e.target.value })}
+        />
         {needsBaseURL && (
           <>
             <span>Base URL</span>
             <input
-              placeholder={form.type === 'ollama' ? 'http://localhost:11434/v1 (기본값)' : 'https://...'}
+              placeholder={
+                form.type === 'ollama'
+                  ? 'http://localhost:11434/v1 (기본값)'
+                  : '예: https://openrouter.ai/api/v1 — /chat/completions는 붙이지 않음'
+              }
               value={form.baseURL}
               onChange={(e) => setForm({ ...form, baseURL: e.target.value })}
             />

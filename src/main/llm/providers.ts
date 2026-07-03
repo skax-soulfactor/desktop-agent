@@ -95,6 +95,14 @@ export function setActiveProvider(id: string): void {
   }
 }
 
+/** 사용자가 전체 엔드포인트를 붙여 넣어도 동작하도록 정규화 — SDK가 /chat/completions를 스스로 붙인다 */
+function normalizeBaseURL(url: string): string {
+  return url
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/chat\/completions$/, '')
+}
+
 export function getActiveModel(): { model: LanguageModel; config: ProviderConfig } {
   const state = loadState()
   const config = state.providers.find((p) => p.id === state.activeId)
@@ -112,7 +120,7 @@ export function getActiveModel(): { model: LanguageModel; config: ProviderConfig
       return {
         model: createOpenAICompatible({
           name: 'ollama',
-          baseURL: config.baseURL || 'http://localhost:11434/v1',
+          baseURL: normalizeBaseURL(config.baseURL || 'http://localhost:11434/v1'),
           apiKey: apiKey ?? 'ollama'
         }).chatModel(config.model),
         config
@@ -120,9 +128,11 @@ export function getActiveModel(): { model: LanguageModel; config: ProviderConfig
     case 'openai-compatible':
       if (!config.baseURL) throw new Error('openai-compatible 프로바이더는 baseURL이 필요합니다.')
       return {
-        model: createOpenAICompatible({ name: config.label, baseURL: config.baseURL, apiKey }).chatModel(
-          config.model
-        ),
+        model: createOpenAICompatible({
+          name: config.label,
+          baseURL: normalizeBaseURL(config.baseURL),
+          apiKey
+        }).chatModel(config.model),
         config
       }
   }
