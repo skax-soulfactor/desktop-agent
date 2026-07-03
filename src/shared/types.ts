@@ -27,7 +27,7 @@ export type ChatItem =
       toolCallId: string
       toolName: string
       summary: string
-      status: 'running' | 'done' | 'denied' | 'error'
+      status: 'running' | 'done' | 'denied' | 'error' | 'aborted'
       output?: string
     }
   | { kind: 'memory'; ops: MemoryOpSummary[] }
@@ -44,7 +44,8 @@ export type ChatEvent =
   | { type: 'tool-call'; toolCallId: string; toolName: string; summary: string }
   | { type: 'tool-result'; toolCallId: string; status: 'done' | 'denied' | 'error'; output: string }
   | { type: 'memory-saved'; ops: MemoryOpSummary[] }
-  | { type: 'turn-end'; error?: string }
+  /** unresolvedToolCallIds: 턴 종료 시점에 아직 결과가 없는 도구 호출 (중단됨으로 확정) */
+  | { type: 'turn-end'; error?: string; unresolvedToolCallIds: string[] }
 
 export interface ApprovalRequest {
   requestId: string

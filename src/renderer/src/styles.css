@@ -79,6 +79,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .toolcard .badge.done { color: var(--ok); border-color: var(--ok); }
 .toolcard .badge.running { color: var(--warn); border-color: var(--warn); }
 .toolcard .badge.denied, .toolcard .badge.error { color: var(--danger); border-color: var(--danger); }
+.toolcard .badge.aborted { color: var(--text-dim); border-color: var(--text-dim); }
 .toolcard pre { margin-top: 8px; padding: 8px; background: var(--bg); border-radius: 6px; overflow-x: auto; font-size: 12px; color: var(--text-dim); max-height: 160px; overflow-y: auto; }
 
 .memcard { align-self: center; font-size: 12px; color: var(--text-dim); background: var(--panel); border: 1px dashed var(--border); border-radius: 10px; padding: 6px 12px; }

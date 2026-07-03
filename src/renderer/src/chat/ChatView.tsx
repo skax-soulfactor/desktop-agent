@@ -69,6 +69,17 @@ export default function ChatView(): JSX.Element {
       } else if (e.type === 'turn-end') {
         setBusy(false)
         if (e.error) setError(e.error)
+        // 아직 '실행 중'으로 남은 도구 카드를 '중단됨'으로 확정해 스피너가 무한히 도는 현상을 막는다
+        if (e.unresolvedToolCallIds.length > 0) {
+          const stuck = new Set(e.unresolvedToolCallIds)
+          setItems((prev) =>
+            prev.map((it) =>
+              it.kind === 'tool' && it.status === 'running' && stuck.has(it.toolCallId)
+                ? { ...it, status: 'aborted' as const }
+                : it
+            )
+          )
+        }
         void refreshSessions()
       }
     })
@@ -84,6 +95,8 @@ export default function ChatView(): JSX.Element {
       setActiveId(id)
       setItems(s.items)
       setError(null)
+      // 버튼 상태를 이벤트가 아닌 실제 실행 여부로 동기화 (세션 전환·이벤트 누락 시 desync 방지)
+      setBusy(await window.api.chatIsRunning(id))
     }
   }
 
@@ -92,6 +105,7 @@ export default function ChatView(): JSX.Element {
     await refreshSessions()
     setActiveId(s.meta.id)
     setItems([])
+    setBusy(false)
   }
 
   const removeSession = async (id: string): Promise<void> => {
@@ -160,7 +174,9 @@ export default function ChatView(): JSX.Element {
                         ? '완료'
                         : it.status === 'denied'
                           ? '거부됨'
-                          : '오류'}
+                          : it.status === 'aborted'
+                            ? '중단됨'
+                            : '오류'}
                   </span>
                   <span>{it.summary}</span>
                 </div>

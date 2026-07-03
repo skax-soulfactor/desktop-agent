@@ -1,6 +1,6 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import type { ApprovalDecision, ProviderConfig } from '@shared/types'
-import { runTurn, abortTurn } from './agent/loop'
+import { runTurn, abortTurn, isTurnRunning } from './agent/loop'
 import { createSession, deleteSession, getSession, listSessions } from './agent/sessions'
 import { respondToApproval } from './permissions/gateway'
 import { listRules, deleteRule } from './permissions/policies'
@@ -14,6 +14,7 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     void runTurn(getWin(), sessionId, text)
   })
   ipcMain.handle('chat:abort', (_e, sessionId: string) => abortTurn(sessionId))
+  ipcMain.handle('chat:isRunning', (_e, sessionId: string) => isTurnRunning(sessionId))
 
   // 승인
   ipcMain.handle('approval:respond', (_e, requestId: string, decision: ApprovalDecision) =>

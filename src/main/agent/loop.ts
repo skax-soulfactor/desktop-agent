@@ -16,6 +16,11 @@ export function abortTurn(sessionId: string): void {
   activeTurns.get(sessionId)?.abort()
 }
 
+/** 렌더러가 버튼 상태를 이벤트가 아닌 실제 실행 여부로 동기화할 수 있게 하는 진짜 출처 */
+export function isTurnRunning(sessionId: string): boolean {
+  return activeTurns.has(sessionId)
+}
+
 /** API 오류를 사용자가 조치할 수 있는 메시지로 변환 */
 function describeError(e: unknown): string {
   const err = e as { message?: string; statusCode?: number; url?: string; responseBody?: string }
@@ -51,7 +56,7 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
 
   const session = getSession(sessionId)
   if (!session) {
-    send({ type: 'turn-end', error: '세션을 찾을 수 없습니다.' })
+    send({ type: 'turn-end', error: '세션을 찾을 수 없습니다.', unresolvedToolCallIds: [] })
     return
   }
 
@@ -69,6 +74,9 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
 
   send({ type: 'turn-start' })
 
+  let assistantText = ''
+  const toolItems = new Map<string, ChatItem & { kind: 'tool' }>()
+
   try {
     const { model } = getActiveModel()
     const memoryContext = buildMemoryContext(userText)
@@ -82,9 +90,6 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
       stopWhen: stepCountIs(MAX_STEPS),
       abortSignal: abort.signal
     })
-
-    let assistantText = ''
-    const toolItems = new Map<string, ChatItem & { kind: 'tool' }>()
 
     for await (const part of result.fullStream) {
       if (part.type === 'text-delta') {
@@ -133,7 +138,8 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
       transcript.push(`에이전트: ${assistantText}`)
     }
     saveSession(session)
-    send({ type: 'turn-end' })
+    // 정상 종료 시에도 방어적으로 미해결 도구를 확정 (SDK가 보통 모든 결과를 채우지만 스텝 한도 등 대비)
+    send({ type: 'turn-end', unresolvedToolCallIds: resolveDanglingTools(toolItems) })
 
     // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다
     void extractMemories(sessionId, transcript.join('\n'), ctx.failures)
@@ -150,9 +156,31 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
       .catch(() => {})
   } catch (e) {
     const aborted = abort.signal.aborted
+    // 오류·중단으로 끝난 턴: 아직 '실행 중'인 도구 카드를 '중단됨'으로 확정한다.
+    // 이렇게 하지 않으면 렌더러에서 스피너가 영원히 도는 것처럼 보인다.
+    const unresolved = resolveDanglingTools(toolItems)
+    for (const item of toolItems.values()) session.items.push(item)
+    if (assistantText) session.items.push({ kind: 'assistant', text: assistantText })
     saveSession(session)
-    send({ type: 'turn-end', error: aborted ? '사용자가 중지했습니다.' : describeError(e) })
+    send({
+      type: 'turn-end',
+      error: aborted ? '사용자가 중지했습니다.' : describeError(e),
+      unresolvedToolCallIds: unresolved
+    })
   } finally {
     activeTurns.delete(sessionId)
   }
+}
+
+/** '실행 중'에 남은 도구를 '중단됨'으로 바꾸고 그 id 목록을 반환 */
+function resolveDanglingTools(toolItems: Map<string, ChatItem & { kind: 'tool' }>): string[] {
+  const ids: string[] = []
+  for (const item of toolItems.values()) {
+    if (item.status === 'running') {
+      item.status = 'aborted'
+      item.output = item.output ?? '턴이 종료되어 중단되었습니다.'
+      ids.push(item.toolCallId)
+    }
+  }
+  return ids
 }

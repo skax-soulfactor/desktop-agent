@@ -19,6 +19,7 @@ export interface SessionDataDto {
 export interface DesktopAgentApi {
   chatSend(sessionId: string, text: string): Promise<void>
   chatAbort(sessionId: string): Promise<void>
+  chatIsRunning(sessionId: string): Promise<boolean>
   onChatEvent(cb: (e: ChatEvent & { sessionId: string }) => void): () => void
 
   approvalRespond(requestId: string, decision: ApprovalDecision): Promise<void>
