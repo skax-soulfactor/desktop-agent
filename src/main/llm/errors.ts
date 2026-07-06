@@ -3,9 +3,12 @@ export function describeError(e: unknown): string {
   const err = e as { message?: string; statusCode?: number; url?: string; responseBody?: string }
   const status = err.statusCode
   if (status === 404) {
+    const body = err.responseBody ? ` 서버 응답: ${String(err.responseBody).slice(0, 300)}` : ''
     return (
-      `LLM API 404 (Not Found): 모델 ID 또는 Base URL이 잘못되었을 가능성이 큽니다. ` +
-      `설정에서 확인하세요. (요청 주소: ${err.url ?? '알 수 없음'})`
+      `LLM API 404 (Not Found): 모델 ID·Base URL이 잘못되었거나, ` +
+      `모델이 요청한 입력(이미지·PDF 첨부 등)을 지원하지 않는 경우입니다. ` +
+      `이미지·PDF를 보냈다면 설정에서 비전(이미지 입력) 지원 모델로 바꾸세요.` +
+      body
     )
   }
   if (status === 401 || status === 403) {
