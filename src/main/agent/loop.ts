@@ -9,6 +9,7 @@ import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
 import { getSession, saveSession, appendToSession } from './sessions'
 import { taskTools, listTasks } from './tasks'
+import { memoryTools } from '../memory/tools'
 
 const MAX_STEPS = 25
 
@@ -37,6 +38,7 @@ function baseSystemPrompt(sessionId: string): string {
     '- 위임 지시(instruction)는 서브 에이전트가 단독으로 수행할 수 있게 자기완결적으로 작성하라.',
     '- 위임 직후 사용자에게 무엇을 시작했는지 짧게 알리고 턴을 끝내라. 작업 완료를 기다리지 마라.',
     '- 사용자가 작업 취소를 원하면 list_tasks로 확인 후 cancel_task를 호출하라.',
+    '- 사용자가 "기억해줘"라고 명시하거나 앞으로 계속 쓰일 정보(자료 저장 위치, 선호, 규칙)가 나오면 save_memory로 즉시 저장하라.',
     '- "[작업 알림"으로 시작하는 메시지는 사용자가 아닌 시스템이 보낸 작업 상태 알림이다. 사용자 발언으로 취급하지 마라.',
     '',
     '모든 도구 호출은 사용자의 승인을 거친다. 거부되면 이유를 존중하고 다른 방법을 제안하라.',
@@ -61,6 +63,7 @@ function summarizeCall(toolName: string, input: unknown): string {
   if (toolName === 'delegate_task') return `작업 위임: ${String(i.title ?? '')}`
   if (toolName === 'cancel_task') return `작업 취소 요청: ${String(i.taskId ?? '')}`
   if (toolName === 'list_tasks') return '작업 목록 조회'
+  if (toolName === 'save_memory') return `기억 저장: ${String(i.title ?? '')}`
   return toolName
 }
 
@@ -106,7 +109,11 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
       model,
       system,
       messages: messagesForModel,
-      tools: { ...buildTools(ctx, MAIN_AGENT_TOOLS), ...taskTools(win, sessionId) },
+      tools: {
+        ...buildTools(ctx, MAIN_AGENT_TOOLS),
+        ...taskTools(win, sessionId),
+        ...memoryTools(win, sessionId)
+      },
       stopWhen: stepCountIs(MAX_STEPS),
       abortSignal: abort.signal
     })
@@ -158,7 +165,7 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
     // 정상 종료 시에도 방어적으로 미해결 도구를 확정 (스텝 한도 등 대비)
     send({ type: 'turn-end', unresolvedToolCallIds: resolveDanglingTools(toolItems) })
 
-    // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다
+    // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다. 실패는 삼키지 않고 화면에 알린다
     void extractMemories(sessionId, transcript.join('\n'), ctx.failures)
       .then((ops) => {
         if (ops.length > 0) {
@@ -166,7 +173,12 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
           send({ type: 'memory-saved', ops })
         }
       })
-      .catch(() => {})
+      .catch((e: unknown) => {
+        const text = `기억 추출 실패: ${describeError(e)}`
+        console.error('[memory]', text)
+        appendToSession(sessionId, [{ kind: 'notice', text }], [])
+        send({ type: 'notice', text })
+      })
   } catch (e) {
     const aborted = abort.signal.aborted
     // 오류·중단으로 끝난 턴: 아직 '실행 중'인 도구 카드를 '중단됨'으로 확정한다

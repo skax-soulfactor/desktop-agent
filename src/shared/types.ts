@@ -31,6 +31,8 @@ export type ChatItem =
       output?: string
     }
   | { kind: 'memory'; ops: MemoryOpSummary[] }
+  /** 사용자에게 알릴 시스템 공지 (예: 기억 저장 실패) */
+  | { kind: 'notice'; text: string }
   | {
       kind: 'task'
       taskId: string
@@ -71,6 +73,7 @@ export type ChatEvent =
   | { type: 'tool-call'; toolCallId: string; toolName: string; summary: string }
   | { type: 'tool-result'; toolCallId: string; status: 'done' | 'denied' | 'error'; output: string }
   | { type: 'memory-saved'; ops: MemoryOpSummary[] }
+  | { type: 'notice'; text: string }
   | { type: 'task-update'; task: TaskInfo }
   /** unresolvedToolCallIds: 턴 종료 시점에 아직 결과가 없는 도구 호출 (중단됨으로 확정) */
   | { type: 'turn-end'; error?: string; unresolvedToolCallIds: string[] }

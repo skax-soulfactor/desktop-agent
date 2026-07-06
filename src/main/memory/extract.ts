@@ -1,4 +1,4 @@
-import { generateObject } from 'ai'
+import { generateText } from 'ai'
 import { z } from 'zod'
 import type { MemoryOpSummary } from '@shared/types'
 import { getActiveModel } from '../llm/providers'
@@ -38,7 +38,25 @@ const EXTRACT_PROMPT = `너는 데스크톱 에이전트의 기억 관리자다.
 - 비밀번호, API 키, 토큰 등 민감 정보는 절대 저장하지 마라.
 - 실패 신호(도구 오류, 승인 거부, 사용자 정정)가 있으면 lesson 생성을 우선 검토하라.
 - 저장할 것이 없으면 ops를 빈 배열로 반환하라.
-- 모든 기억은 한국어로 작성하라.`
+- 모든 기억은 한국어로 작성하라.
+
+출력 형식: 아래 JSON만 출력하라. 설명, 인사, 마크다운 코드 펜스 등 다른 텍스트를 붙이지 마라.
+{"ops":[{"op":"create","type":"user|requirement|lesson|reference","title":"한 줄 요약","content":"본문","tags":["태그"]}]}
+update/archive 시에는 {"op":"update","id":"대상 기억 id",...} 형태로 id를 포함하라.`
+
+/** 모델이 코드 펜스나 사족을 붙여도 JSON 본문만 골라 파싱한다 (구조화 출력 미지원 모델 호환) */
+function parseOps(raw: string): z.infer<typeof opsSchema> {
+  let text = raw.trim()
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (fence) text = fence[1].trim()
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start < 0 || end <= start) throw new Error(`JSON 없음: ${raw.slice(0, 120)}`)
+  const parsed: unknown = JSON.parse(text.slice(start, end + 1))
+  const result = opsSchema.safeParse(parsed)
+  if (!result.success) throw new Error(`형식 불일치: ${result.error.message.slice(0, 200)}`)
+  return result.data
+}
 
 export async function extractMemories(
   sessionId: string,
@@ -55,12 +73,14 @@ export async function extractMemories(
       ? `\n\n## 이번 턴의 실패 신호 (교훈 후보)\n${failures.map((f) => `- (${f.kind}) ${f.detail}`).join('\n')}`
       : ''
 
-  const { object } = await generateObject({
+  // generateObject(구조화 출력)는 일부 모델이 미지원이라, 어떤 챗 모델에서도 동작하는
+  // generateText + 관대한 JSON 파싱을 사용한다
+  const { text } = await generateText({
     model,
-    schema: opsSchema,
     system: EXTRACT_PROMPT,
     prompt: `## 기존 기억 목록\n${existing || '(없음)'}\n\n## 이번 턴 대화\n${turnTranscript.slice(-8000)}${failureText}`
   })
+  const object = parseOps(text)
 
   const applied: MemoryOpSummary[] = []
   for (const op of object.ops) {

@@ -110,6 +110,8 @@ export default function ChatView(): JSX.Element {
         )
       } else if (e.type === 'memory-saved') {
         setItems((prev) => [...prev, { kind: 'memory', ops: e.ops }])
+      } else if (e.type === 'notice') {
+        setItems((prev) => [...prev, { kind: 'notice', text: e.text }])
       } else if (e.type === 'task-update') {
         const t = e.task
         if (t.status === 'running') {
@@ -226,6 +228,12 @@ export default function ChatView(): JSX.Element {
               return (
                 <div key={i} className="memcard">
                   기억함: {it.ops.map((o) => `${o.title}`).join(' · ')}
+                </div>
+              )
+            if (it.kind === 'notice')
+              return (
+                <div key={i} className="memcard notice">
+                  {it.text}
                 </div>
               )
             if (it.kind === 'task') {
