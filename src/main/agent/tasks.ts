@@ -2,7 +2,7 @@ import { streamText, stepCountIs, tool, type ToolSet } from 'ai'
 import { platform, homedir } from 'os'
 import { z } from 'zod'
 import type { BrowserWindow } from 'electron'
-import type { TaskInfo, TaskStatus } from '@shared/types'
+import type { ChatItem, TaskInfo, TaskStatus } from '@shared/types'
 import { getActiveModel } from '../llm/providers'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
@@ -18,15 +18,20 @@ interface Task {
 
 const tasks = new Map<string, Task>()
 
+/** 로그는 이후에도 계속 변형되므로 이벤트/조회 시 스냅샷을 복사해 보낸다 */
+function snapshot(info: TaskInfo): TaskInfo {
+  return { ...info, log: info.log?.map((x) => ({ ...x })) }
+}
+
 function emit(win: BrowserWindow, info: TaskInfo): void {
   if (!win.isDestroyed()) {
-    win.webContents.send('chat:event', { sessionId: info.sessionId, type: 'task-update', task: { ...info } })
+    win.webContents.send('chat:event', { sessionId: info.sessionId, type: 'task-update', task: snapshot(info) })
   }
 }
 
 export function listTasks(sessionId?: string): TaskInfo[] {
   return [...tasks.values()]
-    .map((t) => ({ ...t.info }))
+    .map((t) => snapshot(t.info))
     .filter((t) => !sessionId || t.sessionId === sessionId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
@@ -71,11 +76,23 @@ function workerPrompt(): string {
   ].join('\n')
 }
 
+const MAX_LOG_ITEMS = 80
+const MAX_TEXT_PER_BLOCK = 4000
+const TEXT_EMIT_INTERVAL_MS = 400
+
 async function runTask(win: BrowserWindow, taskId: string, instruction: string): Promise<void> {
   const t = tasks.get(taskId)
   if (!t) return
   const { info, abort } = t
   const ctx: TurnContext = { sessionId: info.sessionId, win, failures: [] }
+
+  // 워커 활동 로그 — 메인 에이전트 대화처럼 텍스트 블록과 도구 카드가 순서대로 쌓인다
+  const log: ChatItem[] = []
+  info.log = log
+  const toolItems = new Map<string, ChatItem & { kind: 'tool' }>()
+  let textBlock: (ChatItem & { kind: 'assistant' }) | null = null
+  let lastTextEmit = 0
+  let finalText = ''
 
   try {
     const { model } = getActiveModel()
@@ -91,20 +108,56 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
       abortSignal: abort.signal
     })
 
-    let text = ''
     for await (const part of result.fullStream) {
       if (part.type === 'text-delta') {
-        text += part.text
+        finalText += part.text
+        if (!textBlock || log[log.length - 1] !== textBlock) {
+          textBlock = { kind: 'assistant', text: '' }
+          log.push(textBlock)
+        }
+        if (textBlock.text.length < MAX_TEXT_PER_BLOCK) textBlock.text += part.text
+        // 텍스트는 스로틀해 전송 (이벤트 폭주 방지)
+        if (Date.now() - lastTextEmit > TEXT_EMIT_INTERVAL_MS) {
+          lastTextEmit = Date.now()
+          emit(win, info)
+        }
       } else if (part.type === 'tool-call') {
         const def = toolDefByName(part.toolName)
-        info.detail = def ? def.describeCall(part.input as never) : part.toolName
+        const summary = def ? def.describeCall(part.input as never) : part.toolName
+        const item: ChatItem & { kind: 'tool' } = {
+          kind: 'tool',
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          summary,
+          status: 'running'
+        }
+        toolItems.set(part.toolCallId, item)
+        if (log.length < MAX_LOG_ITEMS) log.push(item)
+        textBlock = null
+        info.detail = summary
+        emit(win, info)
+      } else if (part.type === 'tool-result') {
+        const output = JSON.stringify(part.output)
+        const item = toolItems.get(part.toolCallId)
+        if (item) {
+          item.status = output.includes('"denied":true')
+            ? 'denied'
+            : output.includes('"error":')
+              ? 'error'
+              : 'done'
+          item.output = output.slice(0, 2000)
+        }
         emit(win, info)
       } else if (part.type === 'error') {
         throw part.error instanceof Error ? part.error : new Error(String(part.error))
       }
     }
-    finishTask(win, info, 'done', text.trim() || '작업이 완료되었습니다.')
+    finishTask(win, info, 'done', finalText.trim() || '작업이 완료되었습니다.')
   } catch (e) {
+    // 중단·오류 시 아직 '실행 중'인 도구 카드를 확정해 로그가 모순 없이 남게 한다
+    for (const item of toolItems.values()) {
+      if (item.status === 'running') item.status = 'aborted'
+    }
     if (abort.signal.aborted) {
       finishTask(win, info, 'cancelled', '사용자 요청으로 취소되었습니다.')
     } else {
@@ -127,10 +180,20 @@ function finishTask(win: BrowserWindow, info: TaskInfo, status: TaskStatus, resu
   info.finishedAt = new Date().toISOString()
   emit(win, info)
 
-  // 결과 카드를 대화에 남기고, 메인 에이전트가 다음 턴에서 결과를 인지하도록 알림 메시지를 히스토리에 추가
+  // 결과 카드(작업 과정 로그 포함)를 대화에 남기고,
+  // 메인 에이전트가 다음 턴에서 결과를 인지하도록 알림 메시지를 히스토리에 추가
   appendToSession(
     info.sessionId,
-    [{ kind: 'task', taskId: info.id, title: info.title, status, result: info.result }],
+    [
+      {
+        kind: 'task',
+        taskId: info.id,
+        title: info.title,
+        status,
+        result: info.result,
+        log: info.log?.map((x) => ({ ...x }))
+      }
+    ],
     [
       {
         role: 'user',

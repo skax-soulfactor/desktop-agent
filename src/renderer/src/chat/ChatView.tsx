@@ -1,6 +1,45 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatItem, SessionMeta, TaskInfo } from '@shared/types'
 
+const TOOL_STATUS_LABEL: Record<string, string> = {
+  running: '실행 중',
+  done: '완료',
+  denied: '거부됨',
+  error: '오류',
+  aborted: '중단됨'
+}
+
+function ToolCard({ item }: { item: ChatItem & { kind: 'tool' } }): JSX.Element {
+  return (
+    <div className="toolcard">
+      <div className="head">
+        <span className={`badge ${item.status}`}>{TOOL_STATUS_LABEL[item.status]}</span>
+        <span>{item.summary}</span>
+      </div>
+      {item.output && <pre>{item.output}</pre>}
+    </div>
+  )
+}
+
+/** 워커(서브 에이전트)의 작업 과정 — 메인 대화처럼 텍스트와 도구 카드를 순서대로 표시 */
+function WorkLog({ items }: { items: ChatItem[] }): JSX.Element {
+  return (
+    <div className="worklog">
+      {items.length === 0 && <div className="empty">아직 활동이 없습니다.</div>}
+      {items.map((it, i) => {
+        if (it.kind === 'assistant')
+          return (
+            <div key={i} className="msg assistant">
+              {it.text}
+            </div>
+          )
+        if (it.kind === 'tool') return <ToolCard key={i} item={it} />
+        return null
+      })}
+    </div>
+  )
+}
+
 export default function ChatView(): JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -8,6 +47,10 @@ export default function ChatView(): JSX.Element {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [runningTasks, setRunningTasks] = useState<TaskInfo[]>([])
+  /** 실시간 과정을 펼쳐 보는 진행 중 작업 id */
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
+  /** 과정을 펼친 완료 작업 카드의 taskId 집합 */
+  const [openLogs, setOpenLogs] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<string | null>(null)
@@ -77,11 +120,12 @@ export default function ChatView(): JSX.Element {
             return [...prev, t]
           })
         } else {
-          // 종료: 표시줄에서 제거하고 결과 카드를 대화에 추가
+          // 종료: 표시줄에서 제거하고 결과 카드(과정 로그 포함)를 대화에 추가
           setRunningTasks((prev) => prev.filter((x) => x.id !== t.id))
+          setExpandedTaskId((prev) => (prev === t.id ? null : prev))
           setItems((prev) => [
             ...prev,
-            { kind: 'task', taskId: t.id, title: t.title, status: t.status, result: t.result }
+            { kind: 'task', taskId: t.id, title: t.title, status: t.status, result: t.result, log: t.log }
           ])
         }
       } else if (e.type === 'turn-end') {
@@ -184,7 +228,8 @@ export default function ChatView(): JSX.Element {
                   기억함: {it.ops.map((o) => `${o.title}`).join(' · ')}
                 </div>
               )
-            if (it.kind === 'task')
+            if (it.kind === 'task') {
+              const logOpen = openLogs.has(it.taskId)
               return (
                 <div key={i} className="toolcard">
                   <div className="head">
@@ -196,47 +241,64 @@ export default function ChatView(): JSX.Element {
                       {it.status === 'done' ? '작업 완료' : it.status === 'cancelled' ? '작업 취소됨' : '작업 실패'}
                     </span>
                     <span>{it.title}</span>
+                    {it.log && it.log.length > 0 && (
+                      <button
+                        className="loglink"
+                        onClick={() =>
+                          setOpenLogs((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(it.taskId)) next.delete(it.taskId)
+                            else next.add(it.taskId)
+                            return next
+                          })
+                        }
+                      >
+                        {logOpen ? '과정 접기' : '과정 보기'}
+                      </button>
+                    )}
                   </div>
+                  {logOpen && it.log && <WorkLog items={it.log} />}
                   {it.result && <pre>{it.result}</pre>}
                 </div>
               )
-            return (
-              <div key={i} className="toolcard">
-                <div className="head">
-                  <span className={`badge ${it.status}`}>
-                    {it.status === 'running'
-                      ? '실행 중'
-                      : it.status === 'done'
-                        ? '완료'
-                        : it.status === 'denied'
-                          ? '거부됨'
-                          : it.status === 'aborted'
-                            ? '중단됨'
-                            : '오류'}
-                  </span>
-                  <span>{it.summary}</span>
-                </div>
-                {it.output && <pre>{it.output}</pre>}
-              </div>
-            )
+            }
+            return <ToolCard key={i} item={it} />
           })}
           <div ref={bottomRef} />
         </div>
         {runningTasks.length > 0 && (
-          <div className="taskbar">
-            {runningTasks.map((t) => (
-              <div key={t.id} className="taskchip">
-                <span className="pulse" />
-                <span>
-                  {t.title}
-                  {t.detail && <span className="detail"> — {t.detail}</span>}
-                </span>
-                <button className="chip-cancel" onClick={() => void window.api.cancelTask(t.id)}>
-                  취소
-                </button>
-              </div>
-            ))}
-          </div>
+          <>
+            <div className="taskbar">
+              {runningTasks.map((t) => (
+                <div key={t.id} className="taskchip">
+                  <span className="pulse" />
+                  <span>
+                    {t.title}
+                    {t.detail && <span className="detail"> — {t.detail}</span>}
+                  </span>
+                  <button
+                    className="chip-view"
+                    onClick={() => setExpandedTaskId(expandedTaskId === t.id ? null : t.id)}
+                  >
+                    {expandedTaskId === t.id ? '접기' : '보기'}
+                  </button>
+                  <button className="chip-cancel" onClick={() => void window.api.cancelTask(t.id)}>
+                    취소
+                  </button>
+                </div>
+              ))}
+            </div>
+            {expandedTaskId &&
+              (() => {
+                const t = runningTasks.find((x) => x.id === expandedTaskId)
+                if (!t) return null
+                return (
+                  <div className="tasklog-panel">
+                    <WorkLog items={t.log ?? []} />
+                  </div>
+                )
+              })()}
+          </>
         )}
         {error && <div className="error-banner">{error}</div>}
         <div className="composer">

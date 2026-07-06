@@ -92,7 +92,17 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .taskchip .detail { color: var(--text-dim); }
 .taskchip .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
 .taskchip .chip-cancel { border: none; background: none; color: var(--danger); padding: 0 2px; font-size: 12px; }
+.taskchip .chip-view { border: none; background: none; color: var(--accent); padding: 0 2px; font-size: 12px; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.tasklog-panel {
+  margin: 8px 8% 0; padding: 10px; max-height: 300px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.worklog { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.worklog .msg { font-size: 13px; }
+.worklog .toolcard { background: var(--panel-2); }
+.toolcard .loglink { border: none; background: none; color: var(--accent); padding: 0 2px; font-size: 12px; margin-left: auto; }
 
 .composer { display: flex; gap: 8px; padding: 14px 8%; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 160px; }

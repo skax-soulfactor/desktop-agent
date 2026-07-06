@@ -31,7 +31,15 @@ export type ChatItem =
       output?: string
     }
   | { kind: 'memory'; ops: MemoryOpSummary[] }
-  | { kind: 'task'; taskId: string; title: string; status: TaskStatus; result?: string }
+  | {
+      kind: 'task'
+      taskId: string
+      title: string
+      status: TaskStatus
+      result?: string
+      /** 워커의 작업 과정 (도구 호출·중간 텍스트) — 완료 후에도 펼쳐볼 수 있다 */
+      log?: ChatItem[]
+    }
 
 export type TaskStatus = 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -45,6 +53,8 @@ export interface TaskInfo {
   detail?: string
   /** 종료 시 결과 요약 */
   result?: string
+  /** 워커의 활동 로그 — 진행 중 실시간 갱신 */
+  log?: ChatItem[]
   createdAt: string
   finishedAt?: string
 }
