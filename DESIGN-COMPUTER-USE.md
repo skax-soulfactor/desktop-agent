@@ -39,10 +39,10 @@
    - 1순위: 셸/API (`shell_exec`, `web_fetch`) — 파일·데이터 작업은 GUI 불필요.
    - 2순위: **스크립팅 인터페이스** — macOS AppleScript/JXA(`osascript`)는 많은 앱(Finder, Safari,
      Mail, Notes, Excel 등)을 좌표 없이 명령으로 제어 가능. 스크린샷 0장으로 끝나는 경우가 많다.
-   - 3순위: **접근성(Accessibility) 트리 기반 제어** — 화면을 이미지가 아니라 UI 요소 트리(텍스트)로
-     읽고, 요소 ID로 클릭. 이미지 토큰 → 텍스트 토큰(수백 토큰)으로 대체되고 좌표 오차가 없다.
-     macOS AXUIElement, Windows UIAutomation, Linux AT-SPI.
-   - 4순위: 픽셀 루프 (접근성 트리가 없는 캔버스형 UI, 게임형 UI만).
+   - 3순위: **텍스트 화면 표현(Screen-as-Text) 기반 제어** — 화면을 이미지가 아니라 구조화된
+     텍스트로 변환해 LLM에 제공하고, 요소 ID로 클릭. 상세는 2.2. 이미지 토큰 → 텍스트 토큰
+     (수백~1.5k)으로 대체되고 좌표 오차가 없으며, **비전 모델 없이 텍스트 전용 모델로도 동작**한다.
+   - 4순위: 픽셀 루프 (시각적 배치·색·아이콘 모양 자체가 의미를 갖는 화면만 — 디자인 확인, 차트 판독 등).
 2. **오래된 스크린샷 히스토리 제거** — 컨텍스트에는 최신 1~2장만 유지하고 이전 것은
    "이전 화면: ~였음" 텍스트 요약으로 치환. 제곱 증가를 선형으로 낮춘다.
 3. **다운스케일 + 영역 캡처** — 전체 화면 대신 대상 창만 캡처(`desktopCapturer` 창 단위),
@@ -51,8 +51,41 @@
    다를 때만 재캡처. 확실한 구간에서 왕복을 1/3로 줄인다.
 5. **매크로 기록·재생** — 성공한 작업의 행동 시퀀스를 지식베이스에 저장(`reference` 타입),
    같은 요청 반복 시 모델 호출 없이 재생하고 실패 시에만 루프로 폴백. 반복 업무의 비용을 0에 수렴시킨다.
-6. **등급 라우팅** — 컴퓨터 제어 작업은 좌표 정확도가 필요하므로 `advanced` 등급 강제
-   (computer-use 훈련된 모델: Claude Sonnet 계열 권장).
+6. **등급 라우팅** — 텍스트 화면 표현 경로는 요소 ID 선택만 하면 되므로 `standard` 등급으로 충분.
+   픽셀 폴백 사용 시에만 `advanced`(computer-use 훈련 모델, Claude Sonnet 계열) 필요.
+
+### 2.2 텍스트 화면 표현 (Screen-as-Text)
+
+스크린샷을 LLM에 보내는 대신, **LLM 없이 프로그램만으로** 화면 내용을 구조화된 텍스트로
+변환해 제공한다. 세 가지 소스를 병합한다:
+
+| 소스 | 획득 방법 (LLM 아님) | 커버 범위 |
+|---|---|---|
+| 접근성 트리 | macOS AXUIElement / Windows UIAutomation / Linux AT-SPI | 네이티브 앱, Electron 앱, 브라우저(웹페이지 전체) |
+| OCR | macOS Vision / Windows.Media.Ocr / tesseract — 온디바이스, 좌표 포함 | 캔버스 UI, 이미지 속 텍스트 (트리 공백 보완) |
+| 창 메타데이터 | 윈도우 매니저 API | 실행 앱 목록, 전면 창, 창 배치 |
+
+**직렬화 형식** (요소 ID 기반):
+
+```
+[창] Mail — 받은편지함 (1280×800)
+e1   button    "새 메시지"          (32,60)   enabled
+e2   textfield "검색"               (900,60)  value=""
+e3   table     "메시지 목록"         (0,120)   rows=42
+e3.7 row       "김철수 — 견적서 송부" (0,340)   selected=false
+ocr1 text      "무료 체험 종료 D-3"   (1050,8)   ← OCR 보완
+```
+
+LLM은 `ax_click(e3.7)`처럼 **요소 ID로 응답**하고, 프로그램이 해당 요소의 실좌표로 실행한다.
+모델이 픽셀 좌표를 계산하지 않으므로 좌표 오차·스케일 문제가 원천 제거된다.
+
+**효과**: 화면당 이미지 ~1,100토큰 → 텍스트 300~1,500토큰, 캡처·인코딩 시간 제거,
+클릭이 결정적(비슷한 버튼 오클릭 없음), 그리고 **비전 미지원 모델로도 컴퓨터 제어 가능**.
+
+**한계**: 접근성 라벨이 부실한 앱(라벨 없는 아이콘, 게임형 커스텀 UI)은 트리가 빈약하고 OCR로
+일부만 보완된다. 색·아이콘 모양·시각적 배치 자체가 의미인 화면은 텍스트로 표현되지 않는다.
+이런 경우에만 픽셀 루프(4순위)로 폴백한다. 트리+OCR 병합 결과가 임계(예: 상호작용 요소 3개 미만)
+이하이면 도구가 `insufficient: true`를 반환해 워커가 폴백을 판단하게 한다.
 
 ---
 
@@ -99,8 +132,11 @@
 ```typescript
 // macOS 우선. Windows/Linux는 8장.
 osascript_run     { script: string }                       // AppleScript/JXA 실행. risk: execute
-ax_read_tree      { app?: string; windowTitle?: string }   // 전면 창의 UI 요소 트리(텍스트) 반환. risk: read
-                  // → [{ id, role, title, value, enabled, frame }] 최대 300개, 깊이 8
+screen_read_text  { app?: string; windowTitle?: string; includeOcr?: boolean }
+                  // 텍스트 화면 표현(2.2): 접근성 트리 + OCR 병합 결과 반환. risk: read
+                  // → { window, elements: [{ id, role, title, value, enabled, frame }],
+                  //     ocrTexts?: [{ id, text, frame }], insufficient?: boolean }
+                  // 최대 300개, 깊이 8. insufficient=true면 픽셀 폴백 판단
 ax_click          { elementId: string }                    // 트리의 요소 id로 클릭 (좌표 불필요). risk: execute
 ax_set_value      { elementId: string; value: string }     // 텍스트 필드 입력. risk: execute
 ```
