@@ -1,5 +1,7 @@
 # Desktop Agent 설계 문서
 
+> 관련 문서: [컴퓨터 제어(Computer Use) 설계](DESIGN-COMPUTER-USE.md) — 구현 보류, 효율 검증(CU-0) 후 결정
+
 크로스 플랫폼(Windows / macOS / Linux) 데스크톱 에이전트 앱.
 사용자가 채팅으로 요청하면 에이전트가 LLM과 로컬 도구(파일, 셸, 화면 등)를 조합해 처리하되,
 **모든 데스크톱 자원 접근은 사용자 승인을 거친다.**
