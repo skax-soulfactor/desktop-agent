@@ -25,8 +25,21 @@ export interface SessionMeta {
   updatedAt: string
 }
 
+/** 렌더러 → 메인으로 전송되는 첨부 파일 */
+export interface AttachmentPayload {
+  name: string
+  mimeType: string
+  dataBase64: string
+}
+
+/** 대화 기록에 남기는 첨부 메타 (본문은 저장하지 않음) */
+export interface AttachmentMeta {
+  name: string
+  mimeType: string
+}
+
 export type ChatItem =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; attachments?: AttachmentMeta[] }
   | { kind: 'assistant'; text: string }
   | {
       kind: 'tool'

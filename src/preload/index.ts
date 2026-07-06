@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   ApprovalDecision,
   ApprovalRequest,
+  AttachmentPayload,
   AuditRecord,
   ChatEvent,
   MemoryEntry,
@@ -17,8 +18,8 @@ import type { DesktopAgentApi, SessionDataDto } from '@shared/api'
 
 /** renderer에 노출하는 유일한 API — 채널 화이트리스트 역할 */
 const api: DesktopAgentApi = {
-  chatSend: (sessionId: string, text: string): Promise<void> =>
-    ipcRenderer.invoke('chat:send', sessionId, text),
+  chatSend: (sessionId: string, text: string, attachments?: AttachmentPayload[]): Promise<void> =>
+    ipcRenderer.invoke('chat:send', sessionId, text, attachments),
   chatAbort: (sessionId: string): Promise<void> => ipcRenderer.invoke('chat:abort', sessionId),
   chatIsRunning: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('chat:isRunning', sessionId),

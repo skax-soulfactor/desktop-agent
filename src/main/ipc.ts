@@ -1,5 +1,5 @@
 import { ipcMain, type BrowserWindow } from 'electron'
-import type { ApprovalDecision, ProviderConfig } from '@shared/types'
+import type { ApprovalDecision, AttachmentPayload, ProviderConfig } from '@shared/types'
 import { runTurn, abortTurn, isTurnRunning } from './agent/loop'
 import { listTasks, cancelTask } from './agent/tasks'
 import { listSchedules, deleteSchedule, setScheduleEnabled } from './agent/scheduler'
@@ -13,8 +13,8 @@ import { listMemories, deleteMemory, updateMemory } from './memory/store'
 
 export function registerIpc(getWin: () => BrowserWindow): void {
   // 채팅
-  ipcMain.handle('chat:send', (_e, sessionId: string, text: string) => {
-    void runTurn(getWin(), sessionId, text)
+  ipcMain.handle('chat:send', (_e, sessionId: string, text: string, attachments?: AttachmentPayload[]) => {
+    void runTurn(getWin(), sessionId, text, attachments ?? [])
   })
   ipcMain.handle('chat:abort', (_e, sessionId: string) => abortTurn(sessionId))
   ipcMain.handle('chat:isRunning', (_e, sessionId: string) => isTurnRunning(sessionId))

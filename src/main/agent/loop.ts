@@ -1,7 +1,8 @@
 import { streamText, stepCountIs } from 'ai'
 import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
-import type { ChatEvent, ChatItem } from '@shared/types'
+import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
+import { buildAttachmentParts } from './attachments'
 import { getModelFor } from '../llm/providers'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
@@ -44,6 +45,7 @@ function baseSystemPrompt(sessionId: string): string {
     '- 사용자가 "기억해줘"라고 명시하거나 앞으로 계속 쓰일 정보(자료 저장 위치, 선호, 규칙)가 나오면 save_memory로 즉시 저장하라.',
     '- 특정 시각 실행("오후 3시에") 또는 주기 실행("1시간마다", "매일 아침 9시") 요청은 schedule_task로 등록하라. 지금 즉시 1회 실행도 원하면 delegate_task를 함께 사용하라. 스케줄은 앱이 실행 중일 때만 동작함을 알려라.',
     '- "[작업 알림"으로 시작하는 메시지는 사용자가 아닌 시스템이 보낸 작업 상태 알림이다. 사용자 발언으로 취급하지 마라.',
+    '- 메시지에 첨부(이미지, PDF, 문서 본문)가 포함되면 내용을 직접 읽고 처리하라(번역·요약·분석은 위임 없이 직접). 결과를 파일로 저장해야 하면 결과 본문을 instruction에 포함해 저장 작업만 위임하라. 워커는 첨부를 볼 수 없다.',
     '',
     '모든 도구 호출은 사용자의 승인을 거친다. 거부되면 이유를 존중하고 다른 방법을 제안하라.',
     '응답은 사용자의 언어로 한다.'
@@ -74,7 +76,12 @@ function summarizeCall(toolName: string, input: unknown): string {
   return toolName
 }
 
-export async function runTurn(win: BrowserWindow, sessionId: string, userText: string): Promise<void> {
+export async function runTurn(
+  win: BrowserWindow,
+  sessionId: string,
+  userText: string,
+  attachments: AttachmentPayload[] = []
+): Promise<void> {
   const send = (e: ChatEvent): void => {
     if (!win.isDestroyed()) win.webContents.send('chat:event', { sessionId, ...e })
   }
@@ -89,12 +96,17 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
   activeTurns.set(sessionId, abort)
 
   const ctx: TurnContext = { sessionId, win, failures: [] }
-  const transcript: string[] = [`사용자: ${userText}`]
+  const { parts, metas } = await buildAttachmentParts(attachments)
+  const attachNote = metas.length > 0 ? ` [첨부: ${metas.map((m) => m.name).join(', ')}]` : ''
+  const transcript: string[] = [`사용자: ${userText}${attachNote}`]
 
   // 사용자 메시지를 먼저 저장하고, 이후에는 append만 한다
   // (백그라운드 작업이 같은 세션에 동시 기록해도 서로 덮어쓰지 않도록)
-  session.items.push({ kind: 'user', text: userText })
-  session.messages.push({ role: 'user', content: userText })
+  session.items.push({ kind: 'user', text: userText, ...(metas.length > 0 ? { attachments: metas } : {}) })
+  session.messages.push({
+    role: 'user',
+    content: parts.length > 0 ? [...parts, { type: 'text', text: userText }] : userText
+  })
   if (session.meta.title === '새 대화') {
     session.meta.title = userText.slice(0, 40)
   }

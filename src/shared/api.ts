@@ -1,6 +1,7 @@
 import type {
   ApprovalDecision,
   ApprovalRequest,
+  AttachmentPayload,
   AuditRecord,
   ChatEvent,
   ChatItem,
@@ -21,7 +22,7 @@ export interface SessionDataDto {
 
 /** preload가 구현하고 renderer가 window.api로 사용하는 계약 */
 export interface DesktopAgentApi {
-  chatSend(sessionId: string, text: string): Promise<void>
+  chatSend(sessionId: string, text: string, attachments?: AttachmentPayload[]): Promise<void>
   chatAbort(sessionId: string): Promise<void>
   chatIsRunning(sessionId: string): Promise<boolean>
 

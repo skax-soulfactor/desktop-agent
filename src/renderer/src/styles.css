@@ -107,6 +107,21 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 
 .composer { display: flex; gap: 8px; padding: 14px 8%; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 160px; }
+.composer > button { white-space: nowrap; align-self: flex-end; }
+
+.attach-bar { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 8% 0; }
+.attach-chip {
+  display: flex; align-items: center; gap: 6px; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px;
+}
+.attach-chip .thumb { height: 36px; border-radius: 4px; display: block; }
+.attach-chip .chip-cancel { border: none; background: none; color: var(--text-dim); padding: 0 2px; }
+
+.file-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.file-chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25); color: var(--text);
+}
 
 .error-banner { margin: 0 8%; padding: 8px 12px; color: var(--danger); font-size: 13px; }
 

@@ -1,5 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChatItem, SessionMeta, TaskInfo } from '@shared/types'
+import type { AttachmentPayload, ChatItem, SessionMeta, TaskInfo } from '@shared/types'
+
+interface PendingAttachment extends AttachmentPayload {
+  previewUrl?: string
+}
+
+const MAX_ATTACHMENTS = 5
+const MAX_ATTACH_BYTES = 15 * 1024 * 1024
+
+function fileToBase64(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result).split(',')[1] ?? '')
+    r.onerror = () => reject(new Error('파일 읽기 실패'))
+    r.readAsDataURL(f)
+  })
+}
 
 const TIER_LABEL: Record<string, string> = { light: '경량', standard: '일반', advanced: '고급' }
 
@@ -53,6 +69,8 @@ export default function ChatView(): JSX.Element {
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
   /** 과정을 펼친 완료 작업 카드의 taskId 집합 */
   const [openLogs, setOpenLogs] = useState<Set<string>>(new Set())
+  const [pending, setPending] = useState<PendingAttachment[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<string | null>(null)
@@ -186,12 +204,48 @@ export default function ChatView(): JSX.Element {
     }
   }
 
+  const addFiles = async (files: Iterable<File>): Promise<void> => {
+    for (const f of files) {
+      if (f.size > MAX_ATTACH_BYTES) {
+        setError(`"${f.name}"은 15MB를 초과해 첨부할 수 없습니다.`)
+        continue
+      }
+      try {
+        const dataBase64 = await fileToBase64(f)
+        const att: PendingAttachment = {
+          name: f.name || 'clipboard-image.png',
+          mimeType: f.type,
+          dataBase64,
+          previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined
+        }
+        setPending((prev) => (prev.length >= MAX_ATTACHMENTS ? prev : [...prev, att]))
+      } catch {
+        setError(`"${f.name}" 읽기에 실패했습니다.`)
+      }
+    }
+  }
+
+  const removePending = (idx: number): void => {
+    setPending((prev) => {
+      const target = prev[idx]
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
+      return prev.filter((_, i) => i !== idx)
+    })
+  }
+
   const send = (): void => {
     const text = input.trim()
-    if (!text || busy || !activeId) return
+    if ((!text && pending.length === 0) || busy || !activeId) return
+    const attachments = pending.map(({ name, mimeType, dataBase64 }) => ({ name, mimeType, dataBase64 }))
+    const metas = pending.map(({ name, mimeType }) => ({ name, mimeType }))
+    for (const p of pending) if (p.previewUrl) URL.revokeObjectURL(p.previewUrl)
     setInput('')
-    void window.api.chatSend(activeId, text)
-    setItems((prev) => [...prev, { kind: 'user', text }])
+    setPending([])
+    void window.api.chatSend(activeId, text, attachments)
+    setItems((prev) => [
+      ...prev,
+      { kind: 'user', text, ...(metas.length > 0 ? { attachments: metas } : {}) }
+    ])
     setBusy(true)
   }
 
@@ -218,13 +272,34 @@ export default function ChatView(): JSX.Element {
           </div>
         ))}
       </div>
-      <div className="main">
+      <div
+        className="main"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault()
+          if (e.dataTransfer.files.length > 0) void addFiles(e.dataTransfer.files)
+        }}
+      >
         <div className="messages">
           {items.length === 0 && (
             <div className="empty">무엇을 도와드릴까요? 파일 정리, 스크립트 실행 등 데스크톱 작업을 요청해 보세요.</div>
           )}
           {items.map((it, i) => {
-            if (it.kind === 'user') return <div key={i} className="msg user">{it.text}</div>
+            if (it.kind === 'user')
+              return (
+                <div key={i} className="msg user">
+                  {it.text}
+                  {it.attachments && it.attachments.length > 0 && (
+                    <div className="file-chips">
+                      {it.attachments.map((a, j) => (
+                        <span key={j} className="file-chip">
+                          {a.mimeType.startsWith('image/') ? '이미지' : '파일'} · {a.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
             if (it.kind === 'assistant') return <div key={i} className="msg assistant">{it.text}</div>
             if (it.kind === 'memory')
               return (
@@ -312,11 +387,47 @@ export default function ChatView(): JSX.Element {
           </>
         )}
         {error && <div className="error-banner">{error}</div>}
+        {pending.length > 0 && (
+          <div className="attach-bar">
+            {pending.map((p, i) => (
+              <span key={i} className="attach-chip">
+                {p.previewUrl ? <img className="thumb" src={p.previewUrl} alt={p.name} /> : null}
+                <span>{p.name}</span>
+                <button className="chip-cancel" onClick={() => removePending(i)}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="composer">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              if (e.target.files) void addFiles(e.target.files)
+              e.target.value = ''
+            }}
+          />
+          <button onClick={() => fileInputRef.current?.click()} title="파일 첨부">
+            + 파일
+          </button>
           <textarea
             value={input}
-            placeholder="메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)"
+            placeholder="메시지 입력 (Enter 전송) — 이미지 붙여넣기, 파일 첨부·드롭 가능"
             onChange={(e) => setInput(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.items)
+                .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+                .map((it) => it.getAsFile())
+                .filter((f): f is File => f !== null)
+              if (files.length > 0) {
+                e.preventDefault()
+                void addFiles(files)
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault()
