@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { registerIpc } from './ipc'
+import { startScheduler } from './agent/scheduler'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -37,6 +38,7 @@ app.whenReady().then(() => {
     return mainWindow
   })
   createWindow()
+  startScheduler(() => mainWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

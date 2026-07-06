@@ -7,6 +7,7 @@ import type {
   MemoryEntry,
   PermissionRule,
   ProviderConfig,
+  Schedule,
   SessionMeta,
   TaskInfo
 } from '@shared/types'
@@ -22,6 +23,11 @@ const api: DesktopAgentApi = {
 
   listTasks: (sessionId?: string): Promise<TaskInfo[]> => ipcRenderer.invoke('tasks:list', sessionId),
   cancelTask: (taskId: string): Promise<boolean> => ipcRenderer.invoke('tasks:cancel', taskId),
+
+  listSchedules: (): Promise<Schedule[]> => ipcRenderer.invoke('schedules:list'),
+  deleteSchedule: (id: string): Promise<boolean> => ipcRenderer.invoke('schedules:delete', id),
+  toggleSchedule: (id: string, enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('schedules:toggle', id, enabled),
   onChatEvent: (cb: (e: ChatEvent & { sessionId: string }) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, ev: ChatEvent & { sessionId: string }): void => cb(ev)
     ipcRenderer.on('chat:event', handler)

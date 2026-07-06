@@ -119,6 +119,28 @@ export interface MemoryEntry {
   status: 'active' | 'archived'
 }
 
+export type ScheduleKind = 'once' | 'interval' | 'daily'
+
+/** 예약/주기 작업 — 시간이 되면 워커 서브 에이전트 작업으로 실행된다 */
+export interface Schedule {
+  id: string
+  sessionId: string
+  title: string
+  /** 워커에게 전달할 자기완결적 지시 */
+  instruction: string
+  kind: ScheduleKind
+  /** kind=once: 실행 시각 (ISO) */
+  runAt?: string
+  /** kind=interval: 실행 간격 (분) */
+  intervalMinutes?: number
+  /** kind=daily: 매일 실행 시각 "HH:MM" */
+  timeOfDay?: string
+  enabled: boolean
+  nextRunAt: string
+  lastRunAt?: string
+  createdAt: string
+}
+
 export interface AuditRecord {
   at: string
   sessionId: string

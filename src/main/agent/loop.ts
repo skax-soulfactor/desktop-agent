@@ -9,6 +9,7 @@ import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
 import { getSession, saveSession, appendToSession } from './sessions'
 import { taskTools, listTasks } from './tasks'
+import { scheduleTools } from './scheduler'
 import { memoryTools } from '../memory/tools'
 
 const MAX_STEPS = 25
@@ -31,6 +32,7 @@ function baseSystemPrompt(sessionId: string): string {
   const lines = [
     '너는 사용자의 데스크톱에서 동작하는 협업 에이전트의 메인(대화) 에이전트다. 사용자와의 대화가 최우선이다.',
     `실행 환경: ${platform()} / 홈 디렉토리: ${homedir()}`,
+    `현재 시각: ${new Date().toString()}`,
     '',
     '## 작업 위임 규칙',
     '- 너가 직접 쓸 수 있는 도구는 빠른 읽기 전용(fs_read, fs_list)뿐이다.',
@@ -39,6 +41,7 @@ function baseSystemPrompt(sessionId: string): string {
     '- 위임 직후 사용자에게 무엇을 시작했는지 짧게 알리고 턴을 끝내라. 작업 완료를 기다리지 마라.',
     '- 사용자가 작업 취소를 원하면 list_tasks로 확인 후 cancel_task를 호출하라.',
     '- 사용자가 "기억해줘"라고 명시하거나 앞으로 계속 쓰일 정보(자료 저장 위치, 선호, 규칙)가 나오면 save_memory로 즉시 저장하라.',
+    '- 특정 시각 실행("오후 3시에") 또는 주기 실행("1시간마다", "매일 아침 9시") 요청은 schedule_task로 등록하라. 지금 즉시 1회 실행도 원하면 delegate_task를 함께 사용하라. 스케줄은 앱이 실행 중일 때만 동작함을 알려라.',
     '- "[작업 알림"으로 시작하는 메시지는 사용자가 아닌 시스템이 보낸 작업 상태 알림이다. 사용자 발언으로 취급하지 마라.',
     '',
     '모든 도구 호출은 사용자의 승인을 거친다. 거부되면 이유를 존중하고 다른 방법을 제안하라.',
@@ -64,6 +67,9 @@ function summarizeCall(toolName: string, input: unknown): string {
   if (toolName === 'cancel_task') return `작업 취소 요청: ${String(i.taskId ?? '')}`
   if (toolName === 'list_tasks') return '작업 목록 조회'
   if (toolName === 'save_memory') return `기억 저장: ${String(i.title ?? '')}`
+  if (toolName === 'schedule_task') return `스케줄 등록: ${String(i.title ?? '')}`
+  if (toolName === 'cancel_schedule') return `스케줄 삭제: ${String(i.scheduleId ?? '')}`
+  if (toolName === 'list_schedules') return '스케줄 목록 조회'
   return toolName
 }
 
@@ -112,6 +118,7 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
       tools: {
         ...buildTools(ctx, MAIN_AGENT_TOOLS),
         ...taskTools(win, sessionId),
+        ...scheduleTools(sessionId),
         ...memoryTools(win, sessionId)
       },
       stopWhen: stepCountIs(MAX_STEPS),

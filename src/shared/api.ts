@@ -7,6 +7,7 @@ import type {
   MemoryEntry,
   PermissionRule,
   ProviderConfig,
+  Schedule,
   SessionMeta,
   TaskInfo
 } from './types'
@@ -24,6 +25,10 @@ export interface DesktopAgentApi {
 
   listTasks(sessionId?: string): Promise<TaskInfo[]>
   cancelTask(taskId: string): Promise<boolean>
+
+  listSchedules(): Promise<Schedule[]>
+  deleteSchedule(id: string): Promise<boolean>
+  toggleSchedule(id: string, enabled: boolean): Promise<boolean>
   onChatEvent(cb: (e: ChatEvent & { sessionId: string }) => void): () => void
 
   approvalRespond(requestId: string, decision: ApprovalDecision): Promise<void>

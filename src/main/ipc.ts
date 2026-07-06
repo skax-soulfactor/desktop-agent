@@ -2,6 +2,7 @@ import { ipcMain, type BrowserWindow } from 'electron'
 import type { ApprovalDecision, ProviderConfig } from '@shared/types'
 import { runTurn, abortTurn, isTurnRunning } from './agent/loop'
 import { listTasks, cancelTask } from './agent/tasks'
+import { listSchedules, deleteSchedule, setScheduleEnabled } from './agent/scheduler'
 import { createSession, deleteSession, getSession, listSessions } from './agent/sessions'
 import { respondToApproval } from './permissions/gateway'
 import { listRules, deleteRule } from './permissions/policies'
@@ -20,6 +21,11 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   // 백그라운드 작업 (서브 에이전트)
   ipcMain.handle('tasks:list', (_e, sessionId?: string) => listTasks(sessionId))
   ipcMain.handle('tasks:cancel', (_e, taskId: string) => cancelTask(taskId))
+
+  // 예약/주기 작업
+  ipcMain.handle('schedules:list', () => listSchedules())
+  ipcMain.handle('schedules:delete', (_e, id: string) => deleteSchedule(id))
+  ipcMain.handle('schedules:toggle', (_e, id: string, enabled: boolean) => setScheduleEnabled(id, enabled))
 
   // 승인
   ipcMain.handle('approval:respond', (_e, requestId: string, decision: ApprovalDecision) =>
