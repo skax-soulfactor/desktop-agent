@@ -2,6 +2,12 @@ export type RiskLevel = 'read' | 'write' | 'execute'
 
 export type ProviderType = 'anthropic' | 'openai' | 'google' | 'ollama' | 'openai-compatible'
 
+/** 모델 등급 — 작업 성격에 따라 자동 라우팅된다 */
+export type ModelTier = 'light' | 'standard' | 'advanced'
+
+/** 등급별 프로바이더 배정 (프로바이더 id 또는 미지정) */
+export type TierAssignment = Record<ModelTier, string | null>
+
 export interface ProviderConfig {
   id: string
   type: ProviderType
@@ -57,6 +63,8 @@ export interface TaskInfo {
   result?: string
   /** 워커의 활동 로그 — 진행 중 실시간 갱신 */
   log?: ChatItem[]
+  /** 이 작업에 사용된 모델 등급 */
+  tier?: ModelTier
   createdAt: string
   finishedAt?: string
 }
@@ -135,6 +143,8 @@ export interface Schedule {
   intervalMinutes?: number
   /** kind=daily: 매일 실행 시각 "HH:MM" */
   timeOfDay?: string
+  /** 실행에 사용할 모델 등급 */
+  tier?: ModelTier
   enabled: boolean
   nextRunAt: string
   lastRunAt?: string

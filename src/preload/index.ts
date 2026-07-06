@@ -5,11 +5,13 @@ import type {
   AuditRecord,
   ChatEvent,
   MemoryEntry,
+  ModelTier,
   PermissionRule,
   ProviderConfig,
   Schedule,
   SessionMeta,
-  TaskInfo
+  TaskInfo,
+  TierAssignment
 } from '@shared/types'
 import type { DesktopAgentApi, SessionDataDto } from '@shared/api'
 
@@ -47,12 +49,13 @@ const api: DesktopAgentApi = {
   getSession: (id: string): Promise<SessionDataDto | null> => ipcRenderer.invoke('sessions:get', id),
   deleteSession: (id: string): Promise<void> => ipcRenderer.invoke('sessions:delete', id),
 
-  listProviders: (): Promise<{ providers: ProviderConfig[]; activeId: string | null }> =>
+  listProviders: (): Promise<{ providers: ProviderConfig[]; tiers: TierAssignment }> =>
     ipcRenderer.invoke('providers:list'),
   saveProvider: (config: ProviderConfig, apiKey?: string): Promise<void> =>
     ipcRenderer.invoke('providers:save', config, apiKey),
   deleteProvider: (id: string): Promise<void> => ipcRenderer.invoke('providers:delete', id),
-  setActiveProvider: (id: string): Promise<void> => ipcRenderer.invoke('providers:setActive', id),
+  setTier: (tier: ModelTier, providerId: string | null): Promise<void> =>
+    ipcRenderer.invoke('providers:setTier', tier, providerId),
 
   listRules: (): Promise<PermissionRule[]> => ipcRenderer.invoke('rules:list'),
   deleteRule: (id: string): Promise<void> => ipcRenderer.invoke('rules:delete', id),

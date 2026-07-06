@@ -2,8 +2,8 @@ import { streamText, stepCountIs, tool, type ToolSet } from 'ai'
 import { platform, homedir } from 'os'
 import { z } from 'zod'
 import type { BrowserWindow } from 'electron'
-import type { ChatItem, TaskInfo, TaskStatus } from '@shared/types'
-import { getActiveModel } from '../llm/providers'
+import type { ChatItem, ModelTier, TaskInfo, TaskStatus } from '@shared/types'
+import { getModelFor } from '../llm/providers'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
@@ -48,16 +48,18 @@ export function startTask(
   win: BrowserWindow,
   sessionId: string,
   title: string,
-  instruction: string
+  instruction: string,
+  tier: ModelTier = 'standard'
 ): TaskInfo {
   // 시작 전에 프로바이더 설정 오류를 조기에 드러낸다
-  getActiveModel()
+  getModelFor(tier)
 
   const info: TaskInfo = {
     id: crypto.randomUUID(),
     sessionId,
     title,
     status: 'running',
+    tier,
     createdAt: new Date().toISOString()
   }
   tasks.set(info.id, { info, abort: new AbortController() })
@@ -95,7 +97,7 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
   let finalText = ''
 
   try {
-    const { model } = getActiveModel()
+    const { model } = getModelFor(info.tier ?? 'standard')
     const memoryContext = buildMemoryContext(instruction)
     const system = memoryContext ? `${workerPrompt()}\n\n${memoryContext}` : workerPrompt()
 
@@ -215,12 +217,18 @@ export function taskTools(win: BrowserWindow, sessionId: string): ToolSet {
         '즉시 taskId를 반환하고 작업은 병렬로 진행되므로, 위임 후에는 사용자와 대화를 계속할 수 있다.',
       inputSchema: z.object({
         title: z.string().describe('작업 제목 한 줄 (사용자에게 표시됨)'),
-        instruction: z.string().describe('서브 에이전트가 단독 수행할 수 있는 상세하고 자기완결적인 지시')
+        instruction: z.string().describe('서브 에이전트가 단독 수행할 수 있는 상세하고 자기완결적인 지시'),
+        tier: z
+          .enum(['light', 'standard', 'advanced'])
+          .optional()
+          .describe(
+            '모델 등급: light=단순 수집·정리·기계적 작업, standard=일반 작업(기본값), advanced=복잡한 분석·코드 작성·중요 문서'
+          )
       }),
-      execute: async ({ title, instruction }) => {
+      execute: async ({ title, instruction, tier }) => {
         try {
-          const info = startTask(win, sessionId, title, instruction)
-          return { taskId: info.id, status: info.status }
+          const info = startTask(win, sessionId, title, instruction, tier ?? 'standard')
+          return { taskId: info.id, status: info.status, tier: info.tier }
         } catch (e) {
           return { error: e instanceof Error ? e.message : String(e) }
         }

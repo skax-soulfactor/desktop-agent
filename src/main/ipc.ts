@@ -7,7 +7,8 @@ import { createSession, deleteSession, getSession, listSessions } from './agent/
 import { respondToApproval } from './permissions/gateway'
 import { listRules, deleteRule } from './permissions/policies'
 import { listAudit } from './permissions/audit'
-import { listProviders, saveProvider, deleteProvider, setActiveProvider } from './llm/providers'
+import { listProviders, saveProvider, deleteProvider, setTier } from './llm/providers'
+import type { ModelTier } from '@shared/types'
 import { listMemories, deleteMemory, updateMemory } from './memory/store'
 
 export function registerIpc(getWin: () => BrowserWindow): void {
@@ -44,7 +45,9 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     saveProvider(config, apiKey)
   )
   ipcMain.handle('providers:delete', (_e, id: string) => deleteProvider(id))
-  ipcMain.handle('providers:setActive', (_e, id: string) => setActiveProvider(id))
+  ipcMain.handle('providers:setTier', (_e, tier: ModelTier, providerId: string | null) =>
+    setTier(tier, providerId)
+  )
 
   // 권한 규칙 / 감사 로그
   ipcMain.handle('rules:list', () => listRules())

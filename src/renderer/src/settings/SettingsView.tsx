@@ -1,5 +1,18 @@
 import { useEffect, useState } from 'react'
-import type { AuditRecord, PermissionRule, ProviderConfig, ProviderType } from '@shared/types'
+import type {
+  AuditRecord,
+  ModelTier,
+  PermissionRule,
+  ProviderConfig,
+  ProviderType,
+  TierAssignment
+} from '@shared/types'
+
+const TIER_INFO: { tier: ModelTier; label: string; desc: string }[] = [
+  { tier: 'light', label: '경량', desc: '기억 추출, 단순 수집·정리 작업' },
+  { tier: 'standard', label: '일반', desc: '대화(메인 에이전트), 일반 작업 — 기본값' },
+  { tier: 'advanced', label: '고급', desc: '복잡한 분석, 코드 작성, 중요 문서' }
+]
 
 const TYPE_OPTIONS: { value: ProviderType; label: string }[] = [
   { value: 'anthropic', label: 'Anthropic (Claude)' },
@@ -28,7 +41,7 @@ const emptyForm = (): ProviderConfig & { apiKey: string } => ({
 
 export default function SettingsView(): JSX.Element {
   const [providers, setProviders] = useState<ProviderConfig[]>([])
-  const [activeId, setActiveId] = useState<string | null>(null)
+  const [tiers, setTiers] = useState<TierAssignment>({ light: null, standard: null, advanced: null })
   const [form, setForm] = useState(emptyForm())
   const [rules, setRules] = useState<PermissionRule[]>([])
   const [audit, setAudit] = useState<AuditRecord[]>([])
@@ -37,7 +50,7 @@ export default function SettingsView(): JSX.Element {
   const refresh = async (): Promise<void> => {
     const p = await window.api.listProviders()
     setProviders(p.providers)
-    setActiveId(p.activeId)
+    setTiers(p.tiers)
     setRules(await window.api.listRules())
     setAudit(await window.api.listAudit())
   }
@@ -76,21 +89,12 @@ export default function SettingsView(): JSX.Element {
           <table>
             <thead>
               <tr>
-                <th>사용</th><th>이름</th><th>종류</th><th>모델</th><th>API 키</th><th></th>
+                <th>이름</th><th>종류</th><th>모델</th><th>API 키</th><th></th>
               </tr>
             </thead>
             <tbody>
               {providers.map((p) => (
                 <tr key={p.id}>
-                  <td>
-                    <input
-                      type="radio"
-                      checked={p.id === activeId}
-                      onChange={() => {
-                        void window.api.setActiveProvider(p.id).then(refresh)
-                      }}
-                    />
-                  </td>
                   <td>{p.label}</td>
                   <td className="dim">{p.type}</td>
                   <td className="dim">{p.model}</td>
@@ -105,6 +109,38 @@ export default function SettingsView(): JSX.Element {
             </tbody>
           </table>
         )}
+      </div>
+
+      <h3>모델 역할 배정</h3>
+      <div className="card">
+        <div style={{ color: 'var(--text-dim)', fontSize: 13, marginBottom: 10 }}>
+          작업 성격에 따라 에이전트가 등급을 자동 선택합니다. 미지정 등급은 가까운 등급으로 대체됩니다.
+        </div>
+        <table>
+          <tbody>
+            {TIER_INFO.map(({ tier, label, desc }) => (
+              <tr key={tier}>
+                <td style={{ width: 60 }}>{label}</td>
+                <td className="dim">{desc}</td>
+                <td style={{ width: 220 }}>
+                  <select
+                    value={tiers[tier] ?? ''}
+                    onChange={(e) => {
+                      void window.api.setTier(tier, e.target.value || null).then(refresh)
+                    }}
+                  >
+                    <option value="">(미지정)</option>
+                    {providers.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label} — {p.model}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       <h3>프로바이더 추가</h3>

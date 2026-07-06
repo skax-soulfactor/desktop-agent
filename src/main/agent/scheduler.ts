@@ -65,7 +65,10 @@ function computeNext(s: Schedule, from: Date): string | null {
 }
 
 function createSchedule(
-  data: Pick<Schedule, 'sessionId' | 'title' | 'instruction' | 'kind' | 'runAt' | 'intervalMinutes' | 'timeOfDay'>
+  data: Pick<
+    Schedule,
+    'sessionId' | 'title' | 'instruction' | 'kind' | 'runAt' | 'intervalMinutes' | 'timeOfDay' | 'tier'
+  >
 ): Schedule {
   const now = new Date()
   const draft: Schedule = {
@@ -103,7 +106,7 @@ export function startScheduler(getWin: () => BrowserWindow | null): void {
         s.nextRunAt = computeNext(s, now) ?? s.nextRunAt
       }
       try {
-        startTask(win, s.sessionId, `[스케줄] ${s.title}`, s.instruction)
+        startTask(win, s.sessionId, `[스케줄] ${s.title}`, s.instruction, s.tier ?? 'standard')
       } catch (e) {
         appendToSession(
           s.sessionId,
@@ -132,7 +135,11 @@ export function scheduleTools(sessionId: string): ToolSet {
         kind: z.enum(['once', 'interval', 'daily']),
         runAt: z.string().optional().describe('kind=once: 실행 시각 ISO 8601 (예: 2026-07-06T15:00:00+09:00)'),
         intervalMinutes: z.number().optional().describe(`kind=interval: 실행 간격(분), 최소 ${MIN_INTERVAL_MINUTES}`),
-        timeOfDay: z.string().optional().describe('kind=daily: 매일 실행 시각 "HH:MM" (24시간, 로컬 시간)')
+        timeOfDay: z.string().optional().describe('kind=daily: 매일 실행 시각 "HH:MM" (24시간, 로컬 시간)'),
+        tier: z
+          .enum(['light', 'standard', 'advanced'])
+          .optional()
+          .describe('모델 등급: light=단순 수집·정리, standard=일반(기본값), advanced=복잡한 분석·작성')
       }),
       execute: async (input) => {
         try {

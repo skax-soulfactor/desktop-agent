@@ -2,7 +2,7 @@ import { streamText, stepCountIs } from 'ai'
 import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { ChatEvent, ChatItem } from '@shared/types'
-import { getActiveModel } from '../llm/providers'
+import { getModelFor } from '../llm/providers'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
@@ -38,6 +38,7 @@ function baseSystemPrompt(sessionId: string): string {
     '- 너가 직접 쓸 수 있는 도구는 빠른 읽기 전용(fs_read, fs_list)뿐이다.',
     '- 파일 생성·수정, 셸 실행, 여러 단계가 필요하거나 오래 걸리는 작업은 반드시 delegate_task로 백그라운드 서브 에이전트에 위임하라.',
     '- 위임 지시(instruction)는 서브 에이전트가 단독으로 수행할 수 있게 자기완결적으로 작성하라.',
+    '- 위임할 때 작업 난이도에 맞는 모델 등급(tier)을 지정하라: 단순 수집·정리·반복 작업은 "light", 일반 작업은 "standard", 복잡한 분석·코드 작성·중요 문서 작성은 "advanced". 사용자가 명시적으로 등급이나 품질을 요구하면 그것을 따르라.',
     '- 위임 직후 사용자에게 무엇을 시작했는지 짧게 알리고 턴을 끝내라. 작업 완료를 기다리지 마라.',
     '- 사용자가 작업 취소를 원하면 list_tasks로 확인 후 cancel_task를 호출하라.',
     '- 사용자가 "기억해줘"라고 명시하거나 앞으로 계속 쓰일 정보(자료 저장 위치, 선호, 규칙)가 나오면 save_memory로 즉시 저장하라.',
@@ -106,7 +107,8 @@ export async function runTurn(win: BrowserWindow, sessionId: string, userText: s
   const toolItems = new Map<string, ChatItem & { kind: 'tool' }>()
 
   try {
-    const { model } = getActiveModel()
+    // 대화는 도구 호출 품질이 중요하므로 '일반' 등급 사용
+    const { model } = getModelFor('standard')
     const memoryContext = buildMemoryContext(userText)
     const base = baseSystemPrompt(sessionId)
     const system = memoryContext ? `${base}\n\n${memoryContext}` : base

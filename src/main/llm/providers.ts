@@ -4,19 +4,28 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModel } from 'ai'
-import type { ProviderConfig } from '@shared/types'
+import type { ModelTier, ProviderConfig, TierAssignment } from '@shared/types'
 import { readJson, writeJson } from '../storage/jsonStore'
 
 interface ProviderState {
   providers: ProviderConfig[]
-  activeId: string | null
+  /** 등급(경량/일반/고급)별 프로바이더 배정 */
+  tiers: TierAssignment
 }
 
 /** API 키는 설정 파일과 분리해 safeStorage(OS 키체인 기반)로 암호화 저장 */
 type KeyFile = Record<string, string> // providerId -> base64(encrypted)
 
+const EMPTY_TIERS: TierAssignment = { light: null, standard: null, advanced: null }
+
 function loadState(): ProviderState {
-  return readJson<ProviderState>('providers.json', { providers: [], activeId: null })
+  const raw = readJson<Partial<ProviderState> & { activeId?: string | null }>('providers.json', {
+    providers: [],
+    tiers: { ...EMPTY_TIERS }
+  })
+  // 구버전(activeId 단일 선택) 마이그레이션: 기존 활성 프로바이더를 '일반' 등급으로
+  const tiers: TierAssignment = raw.tiers ?? { ...EMPTY_TIERS, standard: raw.activeId ?? null }
+  return { providers: raw.providers ?? [], tiers }
 }
 
 function saveState(state: ProviderState): void {
@@ -51,12 +60,12 @@ function getKey(providerId: string): string | null {
   return Buffer.from(stored.slice(4), 'base64').toString('utf-8')
 }
 
-export function listProviders(): { providers: ProviderConfig[]; activeId: string | null } {
+export function listProviders(): { providers: ProviderConfig[]; tiers: TierAssignment } {
   const state = loadState()
   const keys = loadKeys()
   return {
     providers: state.providers.map((p) => ({ ...p, hasKey: Boolean(keys[p.id]) })),
-    activeId: state.activeId
+    tiers: state.tiers
   }
 }
 
@@ -72,7 +81,10 @@ export function saveProvider(config: ProviderConfig, apiKey?: string): void {
   }
   if (idx >= 0) state.providers[idx] = clean
   else state.providers.push(clean)
-  if (!state.activeId) state.activeId = config.id
+  // 아무 등급도 배정되지 않았다면 첫 프로바이더를 '일반'으로
+  if (!state.tiers.light && !state.tiers.standard && !state.tiers.advanced) {
+    state.tiers.standard = config.id
+  }
   saveState(state)
   if (apiKey) storeKey(config.id, apiKey)
 }
@@ -80,19 +92,20 @@ export function saveProvider(config: ProviderConfig, apiKey?: string): void {
 export function deleteProvider(id: string): void {
   const state = loadState()
   state.providers = state.providers.filter((p) => p.id !== id)
-  if (state.activeId === id) state.activeId = state.providers[0]?.id ?? null
+  for (const tier of Object.keys(state.tiers) as ModelTier[]) {
+    if (state.tiers[tier] === id) state.tiers[tier] = null
+  }
   saveState(state)
   const keys = loadKeys()
   delete keys[id]
   saveKeys(keys)
 }
 
-export function setActiveProvider(id: string): void {
+export function setTier(tier: ModelTier, providerId: string | null): void {
   const state = loadState()
-  if (state.providers.some((p) => p.id === id)) {
-    state.activeId = id
-    saveState(state)
-  }
+  if (providerId !== null && !state.providers.some((p) => p.id === providerId)) return
+  state.tiers[tier] = providerId
+  saveState(state)
 }
 
 /** 사용자가 전체 엔드포인트를 붙여 넣어도 동작하도록 정규화 — SDK가 /chat/completions를 스스로 붙인다 */
@@ -103,12 +116,8 @@ function normalizeBaseURL(url: string): string {
     .replace(/\/chat\/completions$/, '')
 }
 
-export function getActiveModel(): { model: LanguageModel; config: ProviderConfig } {
-  const state = loadState()
-  const config = state.providers.find((p) => p.id === state.activeId)
-  if (!config) throw new Error('설정에서 LLM 프로바이더를 먼저 등록하세요.')
+function buildModel(config: ProviderConfig): { model: LanguageModel; config: ProviderConfig } {
   const apiKey = getKey(config.id) ?? undefined
-
   switch (config.type) {
     case 'anthropic':
       return { model: createAnthropic({ apiKey })(config.model), config }
@@ -136,4 +145,26 @@ export function getActiveModel(): { model: LanguageModel; config: ProviderConfig
         config
       }
   }
+}
+
+/** 요청 등급 → 폴백 순서. 미배정 등급은 가까운 등급으로 대체한다 */
+const FALLBACK_ORDER: Record<ModelTier, ModelTier[]> = {
+  light: ['light', 'standard', 'advanced'],
+  standard: ['standard', 'advanced', 'light'],
+  advanced: ['advanced', 'standard', 'light']
+}
+
+export function getModelFor(tier: ModelTier = 'standard'): { model: LanguageModel; config: ProviderConfig } {
+  const state = loadState()
+  for (const t of FALLBACK_ORDER[tier]) {
+    const id = state.tiers[t]
+    const config = state.providers.find((p) => p.id === id)
+    if (config) return buildModel(config)
+  }
+  throw new Error('설정에서 LLM 프로바이더를 등록하고 모델 역할(경량/일반/고급)을 배정하세요.')
+}
+
+/** 하위 호환: 기본(일반) 등급 모델 */
+export function getActiveModel(): { model: LanguageModel; config: ProviderConfig } {
+  return getModelFor('standard')
 }

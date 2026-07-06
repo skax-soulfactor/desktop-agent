@@ -5,11 +5,13 @@ import type {
   ChatEvent,
   ChatItem,
   MemoryEntry,
+  ModelTier,
   PermissionRule,
   ProviderConfig,
   Schedule,
   SessionMeta,
-  TaskInfo
+  TaskInfo,
+  TierAssignment
 } from './types'
 
 export interface SessionDataDto {
@@ -39,10 +41,10 @@ export interface DesktopAgentApi {
   getSession(id: string): Promise<SessionDataDto | null>
   deleteSession(id: string): Promise<void>
 
-  listProviders(): Promise<{ providers: ProviderConfig[]; activeId: string | null }>
+  listProviders(): Promise<{ providers: ProviderConfig[]; tiers: TierAssignment }>
   saveProvider(config: ProviderConfig, apiKey?: string): Promise<void>
   deleteProvider(id: string): Promise<void>
-  setActiveProvider(id: string): Promise<void>
+  setTier(tier: ModelTier, providerId: string | null): Promise<void>
 
   listRules(): Promise<PermissionRule[]>
   deleteRule(id: string): Promise<void>

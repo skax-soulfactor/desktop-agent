@@ -209,6 +209,12 @@ interface LLMProviderConfig {
 }
 ```
 
+**모델 등급 라우팅**: 등록한 프로바이더를 설정에서 경량/일반/고급 3등급에 배정한다.
+작업 성격에 따라 자동 선택된다 — 대화(메인 에이전트)와 일반 위임 작업은 `standard`,
+기억 추출 등 배경 작업은 `light`, 복잡한 분석·코드 작성은 메인 에이전트가 `delegate_task`의
+tier 파라미터로 `advanced`를 지정한다(스케줄에도 tier 저장). 미배정 등급은 가까운 등급으로
+폴백한다(예: light 미지정 → standard).
+
 - **Vercel AI SDK** 사용을 권장: `@ai-sdk/anthropic`, `@ai-sdk/openai`, `@ai-sdk/google`, `ollama-ai-provider` 어댑터가 스트리밍·tool calling 형식 차이를 이미 흡수한다. 직접 어댑터를 짜는 것보다 유지비가 훨씬 낮다.
 - `openai-compatible` 타입 하나로 LM Studio, vLLM, OpenRouter 등 대부분의 서드파티를 커버.
 - 프로바이더별 tool calling 지원 여부를 체크하고, 미지원 모델 선택 시 UI에서 경고.

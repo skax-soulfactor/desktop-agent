@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatItem, SessionMeta, TaskInfo } from '@shared/types'
 
+const TIER_LABEL: Record<string, string> = { light: '경량', standard: '일반', advanced: '고급' }
+
 const TOOL_STATUS_LABEL: Record<string, string> = {
   running: '실행 중',
   done: '완료',
@@ -280,6 +282,7 @@ export default function ChatView(): JSX.Element {
               {runningTasks.map((t) => (
                 <div key={t.id} className="taskchip">
                   <span className="pulse" />
+                  {t.tier && <span className="tag">{TIER_LABEL[t.tier]}</span>}
                   <span>
                     {t.title}
                     {t.detail && <span className="detail"> — {t.detail}</span>}

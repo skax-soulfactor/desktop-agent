@@ -1,7 +1,7 @@
 import { generateText } from 'ai'
 import { z } from 'zod'
 import type { MemoryOpSummary } from '@shared/types'
-import { getActiveModel } from '../llm/providers'
+import { getModelFor } from '../llm/providers'
 import { createMemory, listMemories, updateMemory } from './store'
 
 const opsSchema = z.object({
@@ -63,7 +63,8 @@ export async function extractMemories(
   turnTranscript: string,
   failures: FailureSignal[]
 ): Promise<MemoryOpSummary[]> {
-  const { model } = getActiveModel()
+  // 배경 작업이므로 경량 등급 사용 (미배정 시 일반으로 폴백)
+  const { model } = getModelFor('light')
   const existing = listMemories()
     .map((m) => `- id=${m.id} [${m.type}] ${m.title}`)
     .join('\n')
