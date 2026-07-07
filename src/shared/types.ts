@@ -172,3 +172,86 @@ export interface AuditRecord {
   decision: 'allowed-by-rule' | 'allowed-by-user' | 'denied-by-rule' | 'denied-by-user' | 'blocked'
   result: 'ok' | 'error' | 'denied'
 }
+
+// ─────────────────────────── 에이전트 네트워크 (A2A) ───────────────────────────
+
+export interface AgentSkill {
+  id: string
+  name: string
+  description: string
+  tags: string[]
+}
+
+/** A2A AgentCard 호환 + 앱 확장 필드 */
+export interface AgentCard {
+  protocolVersion: string
+  name: string
+  description: string
+  /** 이 에이전트에 도달하는 주소. v1: http://ip:port, v2: relay://host/agentId */
+  url: string
+  provider?: { organization?: string }
+  version: string
+  capabilities: { streaming: boolean }
+  skills: AgentSkill[]
+  ext: {
+    agentId: string
+    specialtySummary: string
+    acceptedTaskTypes: ('question' | 'task')[]
+    cardGeneratedAt: string
+    /** 자동 갱신에서 보호되는(사용자가 손댄) 필드명 */
+    userEditedFields: string[]
+    autoUpdate: boolean
+  }
+}
+
+export type PeerStatus = 'online' | 'offline' | 'unknown'
+export type PeerRequestPolicy = 'auto' | 'ask' | 'deny'
+
+export interface PeerPolicy {
+  question: PeerRequestPolicy
+  task: PeerRequestPolicy
+  dailyLimit: number
+}
+
+/** 등록된 상대 에이전트 (토큰은 별도 파일에 분리 저장) */
+export interface Peer {
+  id: string
+  name: string
+  address: string
+  card: AgentCard
+  policy: PeerPolicy
+  status: PeerStatus
+  pairedAt: string
+  lastSeenAt?: string
+  /** 오늘 이 피어에게 응답한 횟수 (사용량 상한용) */
+  usedToday: number
+  usageDate: string
+}
+
+/** 네트워크 설정 */
+export interface NetworkConfig {
+  /** 이 에이전트의 고정 id */
+  agentId: string
+  listenEnabled: boolean
+  listenPort: number
+  /** v2 중계서버 주소 (설정 시 RelayTransport 사용) */
+  relayUrl?: string
+}
+
+/** 수신 요청 로그 */
+export interface InboundRecord {
+  id: string
+  at: string
+  peerId: string
+  peerName: string
+  taskType: 'question' | 'task'
+  summary: string
+  result: 'answered' | 'delegated' | 'denied' | 'error' | 'pending'
+}
+
+/** 페어링 요청 (수신측 승인 다이얼로그용) */
+export interface PairRequest {
+  requestId: string
+  requesterCard: AgentCard
+  address: string
+}

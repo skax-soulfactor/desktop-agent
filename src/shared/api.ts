@@ -1,12 +1,17 @@
 import type {
+  AgentCard,
   ApprovalDecision,
   ApprovalRequest,
   AttachmentPayload,
   AuditRecord,
   ChatEvent,
   ChatItem,
+  InboundRecord,
   MemoryEntry,
   ModelTier,
+  NetworkConfig,
+  Peer,
+  PeerPolicy,
   PermissionRule,
   ProviderConfig,
   Schedule,
@@ -14,6 +19,13 @@ import type {
   TaskInfo,
   TierAssignment
 } from './types'
+
+export interface NetworkApproval {
+  requestId: string
+  kind: 'pair' | 'task'
+  title: string
+  detail: string
+}
 
 export interface SessionDataDto {
   meta: SessionMeta
@@ -54,4 +66,22 @@ export interface DesktopAgentApi {
   listMemories(): Promise<MemoryEntry[]>
   deleteMemory(id: string): Promise<void>
   updateMemory(id: string, patch: Partial<MemoryEntry>): Promise<MemoryEntry | null>
+
+  // 에이전트 네트워크
+  netConfig(): Promise<NetworkConfig>
+  netSaveConfig(patch: Partial<NetworkConfig>): Promise<NetworkConfig>
+  netGetCard(): Promise<AgentCard | null>
+  netSaveCard(card: AgentCard): Promise<void>
+  netRegenCard(): Promise<AgentCard>
+  netStartListening(): Promise<void>
+  netStopListening(): Promise<void>
+  netListPeers(): Promise<Peer[]>
+  netUpdatePeerPolicy(id: string, policy: PeerPolicy): Promise<Peer | null>
+  netDeletePeer(id: string): Promise<void>
+  netFetchCard(address: string): Promise<AgentCard>
+  netPair(address: string): Promise<{ ok: boolean; error?: string; peer?: Peer }>
+  netRespondApproval(requestId: string, approved: boolean): Promise<void>
+  netListInbound(): Promise<InboundRecord[]>
+  onNetworkApproval(cb: (a: NetworkApproval) => void): () => void
+  onPeersChanged(cb: () => void): () => void
 }

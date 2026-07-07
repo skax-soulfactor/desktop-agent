@@ -7,17 +7,22 @@ const TYPE_LABEL: Record<string, string> = {
   reference: '참조'
 }
 
+const NO_SHARE_TAG = '공유제외'
+
 /**
  * 회상: (1) 전체 기억의 한 줄 인덱스는 항상 포함, (2) 현재 메시지와 관련된 기억 전문 top-k 주입.
  * 토큰 예산을 넘지 않도록 본문 길이를 제한한다.
+ * shareableOnly=true면 원격(피어) 응답용으로 '공유제외' 태그 기억을 배제한다.
  */
-export function buildMemoryContext(userMessage: string): string {
-  const all = listMemories()
+export function buildMemoryContext(userMessage: string, shareableOnly = false): string {
+  const all = listMemories().filter((m) => !shareableOnly || !m.tags.includes(NO_SHARE_TAG))
   if (all.length === 0) return ''
 
   const index = all.map((m) => `- [${TYPE_LABEL[m.type]}] ${m.title}`).join('\n')
 
-  const relevant = searchMemories(userMessage, 5)
+  const relevant = searchMemories(userMessage, 5).filter(
+    (m) => !shareableOnly || !m.tags.includes(NO_SHARE_TAG)
+  )
   const bodies = relevant
     .map((m) => `### [${TYPE_LABEL[m.type]}] ${m.title}\n${m.content.slice(0, 1500)}`)
     .join('\n\n')

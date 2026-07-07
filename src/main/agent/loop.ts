@@ -12,6 +12,7 @@ import { getSession, saveSession, appendToSession } from './sessions'
 import { taskTools, listTasks } from './tasks'
 import { scheduleTools } from './scheduler'
 import { memoryTools } from '../memory/tools'
+import { peerTools, buildPeerContext } from '../network/peerTools'
 
 const MAX_STEPS = 25
 
@@ -46,10 +47,14 @@ function baseSystemPrompt(sessionId: string): string {
     '- 특정 시각 실행("오후 3시에") 또는 주기 실행("1시간마다", "매일 아침 9시") 요청은 schedule_task로 등록하라. 지금 즉시 1회 실행도 원하면 delegate_task를 함께 사용하라. 스케줄은 앱이 실행 중일 때만 동작함을 알려라.',
     '- "[작업 알림"으로 시작하는 메시지는 사용자가 아닌 시스템이 보낸 작업 상태 알림이다. 사용자 발언으로 취급하지 마라.',
     '- 메시지에 첨부(이미지, PDF, 문서 본문)가 포함되면 내용을 직접 읽고 처리하라(번역·요약·분석은 위임 없이 직접). 결과를 파일로 저장해야 하면 결과 본문을 instruction에 포함해 저장 작업만 위임하라. 워커는 첨부를 볼 수 없다.',
+    '- 요청이 내 전문 밖이고 연결된 피어 에이전트가 적합하면 ask_peer(질의) 또는 delegate_to_peer(작업 위임)를 사용하라.',
     '',
     '모든 도구 호출은 사용자의 승인을 거친다. 거부되면 이유를 존중하고 다른 방법을 제안하라.',
     '응답은 사용자의 언어로 한다.'
   ]
+
+  const peerCtx = buildPeerContext()
+  if (peerCtx) lines.push('', peerCtx)
 
   const running = listTasks(sessionId).filter((t) => t.status === 'running')
   if (running.length > 0) {
@@ -73,6 +78,9 @@ function summarizeCall(toolName: string, input: unknown): string {
   if (toolName === 'schedule_task') return `스케줄 등록: ${String(i.title ?? '')}`
   if (toolName === 'cancel_schedule') return `스케줄 삭제: ${String(i.scheduleId ?? '')}`
   if (toolName === 'list_schedules') return '스케줄 목록 조회'
+  if (toolName === 'list_peers') return '피어 에이전트 목록 조회'
+  if (toolName === 'ask_peer') return `피어에게 질의: ${String(i.question ?? '').slice(0, 40)}`
+  if (toolName === 'delegate_to_peer') return `피어에게 작업 위임: ${String(i.title ?? '')}`
   return toolName
 }
 
@@ -133,7 +141,8 @@ export async function runTurn(
         ...buildTools(ctx, MAIN_AGENT_TOOLS),
         ...taskTools(win, sessionId),
         ...scheduleTools(sessionId),
-        ...memoryTools(win, sessionId)
+        ...memoryTools(win, sessionId),
+        ...peerTools()
       },
       stopWhen: stepCountIs(MAX_STEPS),
       abortSignal: abort.signal

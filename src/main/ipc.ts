@@ -10,6 +10,25 @@ import { listAudit } from './permissions/audit'
 import { listProviders, saveProvider, deleteProvider, setTier } from './llm/providers'
 import type { ModelTier } from '@shared/types'
 import { listMemories, deleteMemory, updateMemory } from './memory/store'
+import type { AgentCard, NetworkConfig, PeerPolicy } from '@shared/types'
+import {
+  getNetworkConfig,
+  saveNetworkConfig,
+  getMyCard,
+  saveMyCard,
+  listPeers,
+  updatePeer,
+  deletePeer,
+  listInbound
+} from './network/store'
+import { regenerateCard } from './network/card'
+import {
+  startListening,
+  stopListening,
+  fetchCardPreview,
+  pairWithAddress,
+  respondNetworkApproval
+} from './network/manager'
 
 export function registerIpc(getWin: () => BrowserWindow): void {
   // 채팅
@@ -60,4 +79,24 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   ipcMain.handle('memory:update', (_e, id: string, patch: Record<string, unknown>) =>
     updateMemory(id, patch)
   )
+
+  // 에이전트 네트워크
+  ipcMain.handle('net:config', () => getNetworkConfig())
+  ipcMain.handle('net:saveConfig', (_e, patch: Partial<NetworkConfig>) => saveNetworkConfig(patch))
+  ipcMain.handle('net:getCard', () => getMyCard())
+  ipcMain.handle('net:saveCard', (_e, card: AgentCard) => saveMyCard(card))
+  ipcMain.handle('net:regenCard', () => regenerateCard())
+  ipcMain.handle('net:startListening', () => startListening())
+  ipcMain.handle('net:stopListening', () => stopListening())
+  ipcMain.handle('net:listPeers', () => listPeers())
+  ipcMain.handle('net:updatePeerPolicy', (_e, id: string, policy: PeerPolicy) =>
+    updatePeer(id, { policy })
+  )
+  ipcMain.handle('net:deletePeer', (_e, id: string) => deletePeer(id))
+  ipcMain.handle('net:fetchCard', (_e, address: string) => fetchCardPreview(address))
+  ipcMain.handle('net:pair', (_e, address: string) => pairWithAddress(address))
+  ipcMain.handle('net:respondApproval', (_e, requestId: string, approved: boolean) =>
+    respondNetworkApproval(requestId, approved)
+  )
+  ipcMain.handle('net:listInbound', () => listInbound(100))
 }

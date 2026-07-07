@@ -195,3 +195,22 @@ delegate_to_peer { peerId, title, instruction }     // 작업 위임 — 원격 
 | **N5** | RelayTransport + 중계서버(별도 프로젝트: 라우팅·디렉토리·TLS·오프라인 큐) |
 
 N1~N3까지가 "B의 PM 에이전트에게 일정 산정 기준을 물어봐줘"가 동작하는 최소 단위다.
+
+## 10. 구현 현황 (2026-07-07)
+
+N1~N4 구현 완료, N5는 RelayTransport 인터페이스 스텁까지.
+
+| 모듈 | 파일 |
+|---|---|
+| 저장소 (설정·카드·피어·토큰·수신로그) | `src/main/network/store.ts` |
+| 카드 자동 생성 (지식베이스 기반, 편집 필드 보존) | `src/main/network/card.ts` |
+| 프로토콜·전송 인터페이스 | `src/main/network/protocol.ts` |
+| DirectHttpTransport (내장 http 서버) | `src/main/network/directTransport.ts` |
+| RelayTransport (v2 스텁) | `src/main/network/relayTransport.ts` |
+| 매니저 (페어링·인바운드 라우팅·아웃바운드·승인) | `src/main/network/manager.ts` |
+| 원격 질의 응답 워커 (도구 없음, 공유제외 필터) | `src/main/network/responder.ts` |
+| 메인 에이전트 피어 도구 | `src/main/network/peerTools.ts` |
+| UI (네트워크 탭, 승인 다이얼로그) | `src/renderer/src/network/` |
+
+미구현/후속: 카드 자동 갱신 스케줄 연동(현재 수동 "지금 갱신"), 스트리밍 응답(현재 요청/응답),
+피어 온라인 핑, RelayTransport 실동작.

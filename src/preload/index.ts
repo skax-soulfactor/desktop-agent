@@ -1,12 +1,17 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
+  AgentCard,
   ApprovalDecision,
   ApprovalRequest,
   AttachmentPayload,
   AuditRecord,
   ChatEvent,
+  InboundRecord,
   MemoryEntry,
   ModelTier,
+  NetworkConfig,
+  Peer,
+  PeerPolicy,
   PermissionRule,
   ProviderConfig,
   Schedule,
@@ -14,7 +19,7 @@ import type {
   TaskInfo,
   TierAssignment
 } from '@shared/types'
-import type { DesktopAgentApi, SessionDataDto } from '@shared/api'
+import type { DesktopAgentApi, NetworkApproval, SessionDataDto } from '@shared/api'
 
 /** renderer에 노출하는 유일한 API — 채널 화이트리스트 역할 */
 const api: DesktopAgentApi = {
@@ -65,7 +70,36 @@ const api: DesktopAgentApi = {
   listMemories: (): Promise<MemoryEntry[]> => ipcRenderer.invoke('memory:list'),
   deleteMemory: (id: string): Promise<void> => ipcRenderer.invoke('memory:delete', id),
   updateMemory: (id: string, patch: Partial<MemoryEntry>): Promise<MemoryEntry | null> =>
-    ipcRenderer.invoke('memory:update', id, patch)
+    ipcRenderer.invoke('memory:update', id, patch),
+
+  netConfig: (): Promise<NetworkConfig> => ipcRenderer.invoke('net:config'),
+  netSaveConfig: (patch: Partial<NetworkConfig>): Promise<NetworkConfig> =>
+    ipcRenderer.invoke('net:saveConfig', patch),
+  netGetCard: (): Promise<AgentCard | null> => ipcRenderer.invoke('net:getCard'),
+  netSaveCard: (card: AgentCard): Promise<void> => ipcRenderer.invoke('net:saveCard', card),
+  netRegenCard: (): Promise<AgentCard> => ipcRenderer.invoke('net:regenCard'),
+  netStartListening: (): Promise<void> => ipcRenderer.invoke('net:startListening'),
+  netStopListening: (): Promise<void> => ipcRenderer.invoke('net:stopListening'),
+  netListPeers: (): Promise<Peer[]> => ipcRenderer.invoke('net:listPeers'),
+  netUpdatePeerPolicy: (id: string, policy: PeerPolicy): Promise<Peer | null> =>
+    ipcRenderer.invoke('net:updatePeerPolicy', id, policy),
+  netDeletePeer: (id: string): Promise<void> => ipcRenderer.invoke('net:deletePeer', id),
+  netFetchCard: (address: string): Promise<AgentCard> => ipcRenderer.invoke('net:fetchCard', address),
+  netPair: (address: string): Promise<{ ok: boolean; error?: string; peer?: Peer }> =>
+    ipcRenderer.invoke('net:pair', address),
+  netRespondApproval: (requestId: string, approved: boolean): Promise<void> =>
+    ipcRenderer.invoke('net:respondApproval', requestId, approved),
+  netListInbound: (): Promise<InboundRecord[]> => ipcRenderer.invoke('net:listInbound'),
+  onNetworkApproval: (cb: (a: NetworkApproval) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, a: NetworkApproval): void => cb(a)
+    ipcRenderer.on('network:approval', handler)
+    return () => ipcRenderer.removeListener('network:approval', handler)
+  },
+  onPeersChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('network:peers-changed', handler)
+    return () => ipcRenderer.removeListener('network:peers-changed', handler)
+  }
 }
 
 contextBridge.exposeInMainWorld('api', api)

@@ -4,8 +4,10 @@ import ApprovalModal from './approval/ApprovalModal'
 import SettingsView from './settings/SettingsView'
 import MemoryView from './memory/MemoryView'
 import SchedulesView from './schedules/SchedulesView'
+import NetworkView from './network/NetworkView'
+import NetworkApprovalModal from './network/NetworkApprovalModal'
 
-type Page = 'chat' | 'memory' | 'schedules' | 'settings'
+type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'settings'
 
 export default function App(): JSX.Element {
   const [page, setPage] = useState<Page>('chat')
@@ -23,6 +25,9 @@ export default function App(): JSX.Element {
         <button className={page === 'schedules' ? 'active' : ''} onClick={() => setPage('schedules')}>
           스케줄
         </button>
+        <button className={page === 'network' ? 'active' : ''} onClick={() => setPage('network')}>
+          네트워크
+        </button>
         <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>
           설정
         </button>
@@ -31,9 +36,11 @@ export default function App(): JSX.Element {
         {page === 'chat' && <ChatView />}
         {page === 'memory' && <MemoryView />}
         {page === 'schedules' && <SchedulesView />}
+        {page === 'network' && <NetworkView />}
         {page === 'settings' && <SettingsView />}
       </div>
       <ApprovalModal />
+      <NetworkApprovalModal />
     </>
   )
 }
