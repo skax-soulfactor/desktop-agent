@@ -8,6 +8,7 @@ import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
 import { appendToSession } from './sessions'
+import { clarifyTool } from './clarify'
 
 const MAX_STEPS = 25
 
@@ -72,7 +73,8 @@ function workerPrompt(): string {
   return [
     '너는 데스크톱 에이전트의 백그라운드 워커다. 메인 에이전트가 위임한 작업을 도구(파일, 셸)로 끝까지 수행한다.',
     `실행 환경: ${platform()} / 홈 디렉토리: ${homedir()}`,
-    '사용자와 대화할 수 없다. 정보가 부족하면 합리적인 기본값을 선택하고 결과 보고에 그 선택을 명시하라.',
+    '사소한 정보 부족은 합리적인 기본값을 선택하고 결과 보고에 그 선택을 명시하라. ' +
+      '그러나 되돌리기 어렵거나 사용자의 취향·판단이 필요한 갈림길(파일 덮어쓰기, 형식·범위 선택, 중요한 결정)에서는 ask_user로 사용자에게 물어라.',
     '도구 승인이 거부되면 다른 방법을 시도하거나, 불가능하면 중단하고 이유를 보고하라.',
     '마지막 응답은 결과 보고여야 한다: 무엇을 했고, 무엇이 만들어졌으며, 미완이 있다면 무엇이 남았는지.'
   ].join('\n')
@@ -101,11 +103,22 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
     const memoryContext = buildMemoryContext(instruction)
     const system = memoryContext ? `${workerPrompt()}\n\n${memoryContext}` : workerPrompt()
 
+    const clarify = clarifyTool({
+      win,
+      taskId: info.id,
+      taskTitle: info.title,
+      abortSignal: abort.signal,
+      onWaiting: (waiting) => {
+        info.detail = waiting ? '사용자 답변 대기 중…' : undefined
+        emit(win, info)
+      }
+    })
+
     const result = streamText({
       model,
       system,
       prompt: instruction,
-      tools: buildTools(ctx),
+      tools: { ...buildTools(ctx), ...clarify },
       stopWhen: stepCountIs(MAX_STEPS),
       abortSignal: abort.signal
     })
@@ -125,7 +138,11 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
         }
       } else if (part.type === 'tool-call') {
         const def = toolDefByName(part.toolName)
-        const summary = def ? def.describeCall(part.input as never) : part.toolName
+        const summary = def
+          ? def.describeCall(part.input as never)
+          : part.toolName === 'ask_user'
+            ? `사용자에게 질문: ${String((part.input as { question?: string })?.question ?? '')}`
+            : part.toolName
         const item: ChatItem & { kind: 'tool' } = {
           kind: 'tool',
           toolCallId: part.toolCallId,

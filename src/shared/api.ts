@@ -6,6 +6,7 @@ import type {
   AuditRecord,
   ChatEvent,
   ChatItem,
+  ClarifyRequest,
   InboundRecord,
   MemoryEntry,
   ModelTier,
@@ -40,6 +41,9 @@ export interface DesktopAgentApi {
 
   listTasks(sessionId?: string): Promise<TaskInfo[]>
   cancelTask(taskId: string): Promise<boolean>
+  clarifyRespond(requestId: string, answer: string): Promise<void>
+  clarifyPending(): Promise<ClarifyRequest[]>
+  onClarifyRequest(cb: (r: ClarifyRequest) => void): () => void
 
   listSchedules(): Promise<Schedule[]>
   deleteSchedule(id: string): Promise<boolean>

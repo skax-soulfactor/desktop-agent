@@ -6,6 +6,7 @@ import type {
   AttachmentPayload,
   AuditRecord,
   ChatEvent,
+  ClarifyRequest,
   InboundRecord,
   MemoryEntry,
   ModelTier,
@@ -31,6 +32,14 @@ const api: DesktopAgentApi = {
 
   listTasks: (sessionId?: string): Promise<TaskInfo[]> => ipcRenderer.invoke('tasks:list', sessionId),
   cancelTask: (taskId: string): Promise<boolean> => ipcRenderer.invoke('tasks:cancel', taskId),
+  clarifyRespond: (requestId: string, answer: string): Promise<void> =>
+    ipcRenderer.invoke('clarify:respond', requestId, answer),
+  clarifyPending: (): Promise<ClarifyRequest[]> => ipcRenderer.invoke('clarify:pending'),
+  onClarifyRequest: (cb: (r: ClarifyRequest) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, r: ClarifyRequest): void => cb(r)
+    ipcRenderer.on('clarify:request', handler)
+    return () => ipcRenderer.removeListener('clarify:request', handler)
+  },
 
   listSchedules: (): Promise<Schedule[]> => ipcRenderer.invoke('schedules:list'),
   deleteSchedule: (id: string): Promise<boolean> => ipcRenderer.invoke('schedules:delete', id),

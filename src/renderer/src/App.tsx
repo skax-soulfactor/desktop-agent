@@ -6,6 +6,7 @@ import MemoryView from './memory/MemoryView'
 import SchedulesView from './schedules/SchedulesView'
 import NetworkView from './network/NetworkView'
 import NetworkApprovalModal from './network/NetworkApprovalModal'
+import ClarifyModal from './clarify/ClarifyModal'
 
 type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'settings'
 
@@ -41,6 +42,7 @@ export default function App(): JSX.Element {
       </div>
       <ApprovalModal />
       <NetworkApprovalModal />
+      <ClarifyModal />
     </>
   )
 }

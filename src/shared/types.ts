@@ -255,3 +255,12 @@ export interface PairRequest {
   requesterCard: AgentCard
   address: string
 }
+
+/** 워커가 작업 중 사용자에게 묻는 질문 (human-in-the-loop) */
+export interface ClarifyRequest {
+  requestId: string
+  taskId: string
+  taskTitle: string
+  question: string
+  options?: string[]
+}
