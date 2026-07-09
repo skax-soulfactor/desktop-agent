@@ -17,6 +17,13 @@ export function describeError(e: unknown): string {
   if (status === 429) {
     return 'LLM API 사용량 한도 초과 (429): 잠시 후 다시 시도하세요.'
   }
+  const code = (e as { cause?: { code?: string } }).cause?.code
+  if (code === 'SELF_SIGNED_CERT_IN_CHAIN' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
+    return (
+      'LLM API TLS 인증서 검증 실패: 회사망 SSL 검사(프록시) 환경일 수 있습니다. ' +
+      '앱을 최신 버전으로 업데이트했는지 확인하거나 IT에 openrouter.ai 허용을 요청하세요.'
+    )
+  }
   const detail = err.responseBody ? ` — ${String(err.responseBody).slice(0, 300)}` : ''
   return (err.message ?? String(e)) + detail
 }

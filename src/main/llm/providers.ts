@@ -6,6 +6,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { LanguageModel } from 'ai'
 import type { ModelTier, ProviderConfig, TierAssignment } from '@shared/types'
 import { readJson, writeJson } from '../storage/jsonStore'
+import { enterpriseFetch } from '../tls'
 
 interface ProviderState {
   providers: ProviderConfig[]
@@ -118,19 +119,21 @@ function normalizeBaseURL(url: string): string {
 
 function buildModel(config: ProviderConfig): { model: LanguageModel; config: ProviderConfig } {
   const apiKey = getKey(config.id) ?? undefined
+  const fetch = enterpriseFetch
   switch (config.type) {
     case 'anthropic':
-      return { model: createAnthropic({ apiKey })(config.model), config }
+      return { model: createAnthropic({ apiKey, fetch })(config.model), config }
     case 'openai':
-      return { model: createOpenAI({ apiKey })(config.model), config }
+      return { model: createOpenAI({ apiKey, fetch })(config.model), config }
     case 'google':
-      return { model: createGoogleGenerativeAI({ apiKey })(config.model), config }
+      return { model: createGoogleGenerativeAI({ apiKey, fetch })(config.model), config }
     case 'ollama':
       return {
         model: createOpenAICompatible({
           name: 'ollama',
           baseURL: normalizeBaseURL(config.baseURL || 'http://localhost:11434/v1'),
-          apiKey: apiKey ?? 'ollama'
+          apiKey: apiKey ?? 'ollama',
+          fetch
         }).chatModel(config.model),
         config
       }
@@ -140,7 +143,8 @@ function buildModel(config: ProviderConfig): { model: LanguageModel; config: Pro
         model: createOpenAICompatible({
           name: config.label,
           baseURL: normalizeBaseURL(config.baseURL),
-          apiKey
+          apiKey,
+          fetch
         }).chatModel(config.model),
         config
       }

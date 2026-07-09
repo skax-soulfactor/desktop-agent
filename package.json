@@ -5,10 +5,10 @@
   "main": "./out/main/index.js",
   "private": true,
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "node scripts/electron-env.cjs dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "start": "electron-vite preview"
+    "start": "node scripts/electron-env.cjs start"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.0",
@@ -20,6 +20,7 @@
     "minimatch": "^10.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "undici": "^7.0.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
