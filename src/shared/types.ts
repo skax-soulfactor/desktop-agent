@@ -39,8 +39,8 @@ export interface AttachmentMeta {
 }
 
 export type ChatItem =
-  | { kind: 'user'; text: string; attachments?: AttachmentMeta[] }
-  | { kind: 'assistant'; text: string }
+  | { kind: 'user'; text: string; at?: string; attachments?: AttachmentMeta[] }
+  | { kind: 'assistant'; text: string; at?: string }
   | {
       kind: 'tool'
       toolCallId: string

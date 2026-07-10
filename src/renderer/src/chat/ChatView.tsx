@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AttachmentPayload, ChatItem, SessionMeta, TaskInfo } from '@shared/types'
+import Markdown from './Markdown'
 
 interface PendingAttachment extends AttachmentPayload {
   previewUrl?: string
@@ -15,6 +16,65 @@ function fileToBase64(f: File): Promise<string> {
     r.onerror = () => reject(new Error('파일 읽기 실패'))
     r.readAsDataURL(f)
   })
+}
+
+function formatTime(at?: string): string {
+  if (!at) return ''
+  const d = new Date(at)
+  if (Number.isNaN(d.getTime())) return ''
+  const hm = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+  const sameDay = d.toDateString() === new Date().toDateString()
+  return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`
+}
+
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    // clipboard API가 막힌 환경(file:// 등) 대비 폴백
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+  }
+}
+
+/** 사용자 메시지 앞의 인용 블록("> ...")을 분리해 스타일링할 수 있게 한다 */
+function splitLeadingQuote(text: string): { quote?: string; body: string } {
+  const lines = text.split('\n')
+  if (!lines[0]?.startsWith('> ')) return { body: text }
+  const q: string[] = []
+  let i = 0
+  while (i < lines.length && lines[i].startsWith('> ')) {
+    q.push(lines[i].slice(2))
+    i++
+  }
+  while (i < lines.length && lines[i].trim() === '') i++
+  return { quote: q.join('\n'), body: lines.slice(i).join('\n') }
+}
+
+/** 복사·시간 메타 행 — 사용자/에이전트 메시지 공용 */
+function MsgMeta({
+  at,
+  copied,
+  onCopy
+}: {
+  at?: string
+  copied: boolean
+  onCopy: () => void
+}): JSX.Element {
+  return (
+    <div className="msg-meta">
+      {at && <span className="time">{formatTime(at)}</span>}
+      <button className="copy" onClick={onCopy} title="마크다운 원문 복사">
+        {copied ? '복사됨 ✓' : '복사'}
+      </button>
+    </div>
+  )
 }
 
 const TIER_LABEL: Record<string, string> = { light: '경량', standard: '일반', advanced: '고급' }
@@ -48,7 +108,7 @@ function WorkLog({ items }: { items: ChatItem[] }): JSX.Element {
         if (it.kind === 'assistant')
           return (
             <div key={i} className="msg assistant">
-              {it.text}
+              <Markdown text={it.text} />
             </div>
           )
         if (it.kind === 'tool') return <ToolCard key={i} item={it} />
@@ -75,6 +135,37 @@ export default function ChatView(): JSX.Element {
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<string | null>(null)
   activeIdRef.current = activeId
+  /** 방금 복사한 메시지 인덱스 (버튼 피드백용) */
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 다음 전송에 인용으로 첨부할 선택 텍스트 */
+  const [quote, setQuote] = useState<string | null>(null)
+  /** 드래그 선택 위에 띄우는 "인용" 버튼 위치와 대상 텍스트 */
+  const [selPop, setSelPop] = useState<{ x: number; y: number; text: string } | null>(null)
+
+  const copyMessage = (text: string, idx: number): void => {
+    void copyText(text)
+    setCopiedIdx(idx)
+    if (copiedTimer.current) clearTimeout(copiedTimer.current)
+    copiedTimer.current = setTimeout(() => setCopiedIdx(null), 1500)
+  }
+
+  const onMessagesMouseUp = (): void => {
+    const sel = window.getSelection()
+    const text = sel && !sel.isCollapsed ? sel.toString().trim() : ''
+    if (!sel || !text) {
+      setSelPop(null)
+      return
+    }
+    const anchor = sel.anchorNode
+    const el = anchor instanceof Element ? anchor : anchor?.parentElement
+    if (!el?.closest('.msg')) {
+      setSelPop(null)
+      return
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect()
+    setSelPop({ x: rect.left + rect.width / 2, y: rect.top, text })
+  }
 
   const refreshSessions = async (): Promise<void> => {
     setSessions(await window.api.listSessions())
@@ -105,9 +196,9 @@ export default function ChatView(): JSX.Element {
         setItems((prev) => {
           const last = prev[prev.length - 1]
           if (last && last.kind === 'assistant') {
-            return [...prev.slice(0, -1), { kind: 'assistant', text: last.text + e.text }]
+            return [...prev.slice(0, -1), { ...last, text: last.text + e.text }]
           }
-          return [...prev, { kind: 'assistant', text: e.text }]
+          return [...prev, { kind: 'assistant', text: e.text, at: new Date().toISOString() }]
         })
       } else if (e.type === 'tool-call') {
         setItems((prev) => [
@@ -179,6 +270,8 @@ export default function ChatView(): JSX.Element {
       setActiveId(id)
       setItems(s.items)
       setError(null)
+      setQuote(null)
+      setSelPop(null)
       // 버튼 상태를 이벤트가 아닌 실제 실행 여부로 동기화 (세션 전환·이벤트 누락 시 desync 방지)
       setBusy(await window.api.chatIsRunning(id))
       setRunningTasks((await window.api.listTasks(id)).filter((t) => t.status === 'running'))
@@ -235,16 +328,24 @@ export default function ChatView(): JSX.Element {
 
   const send = (): void => {
     const text = input.trim()
-    if ((!text && pending.length === 0) || busy || !activeId) return
+    if ((!text && pending.length === 0 && !quote) || busy || !activeId) return
+    // 인용이 있으면 마크다운 블록쿼트로 앞에 붙여 원문 맥락을 함께 전달한다
+    const finalText = quote ? `> ${quote.replace(/\n/g, '\n> ')}\n\n${text}` : text
     const attachments = pending.map(({ name, mimeType, dataBase64 }) => ({ name, mimeType, dataBase64 }))
     const metas = pending.map(({ name, mimeType }) => ({ name, mimeType }))
     for (const p of pending) if (p.previewUrl) URL.revokeObjectURL(p.previewUrl)
     setInput('')
     setPending([])
-    void window.api.chatSend(activeId, text, attachments)
+    setQuote(null)
+    void window.api.chatSend(activeId, finalText, attachments)
     setItems((prev) => [
       ...prev,
-      { kind: 'user', text, ...(metas.length > 0 ? { attachments: metas } : {}) }
+      {
+        kind: 'user',
+        text: finalText,
+        at: new Date().toISOString(),
+        ...(metas.length > 0 ? { attachments: metas } : {})
+      }
     ])
     setBusy(true)
   }
@@ -280,27 +381,41 @@ export default function ChatView(): JSX.Element {
           if (e.dataTransfer.files.length > 0) void addFiles(e.dataTransfer.files)
         }}
       >
-        <div className="messages">
+        <div className="messages" onMouseUp={onMessagesMouseUp} onScroll={() => setSelPop(null)}>
           {items.length === 0 && (
             <div className="empty">무엇을 도와드릴까요? 파일 정리, 스크립트 실행 등 데스크톱 작업을 요청해 보세요.</div>
           )}
           {items.map((it, i) => {
-            if (it.kind === 'user')
+            if (it.kind === 'user') {
+              const { quote: q, body } = splitLeadingQuote(it.text)
               return (
-                <div key={i} className="msg user">
-                  {it.text}
-                  {it.attachments && it.attachments.length > 0 && (
-                    <div className="file-chips">
-                      {it.attachments.map((a, j) => (
-                        <span key={j} className="file-chip">
-                          {a.mimeType.startsWith('image/') ? '이미지' : '파일'} · {a.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                <div key={i} className="msg-wrap user">
+                  <div className="msg user">
+                    {q && <div className="uquote">{q}</div>}
+                    {body}
+                    {it.attachments && it.attachments.length > 0 && (
+                      <div className="file-chips">
+                        {it.attachments.map((a, j) => (
+                          <span key={j} className="file-chip">
+                            {a.mimeType.startsWith('image/') ? '이미지' : '파일'} · {a.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <MsgMeta at={it.at} copied={copiedIdx === i} onCopy={() => copyMessage(it.text, i)} />
                 </div>
               )
-            if (it.kind === 'assistant') return <div key={i} className="msg assistant">{it.text}</div>
+            }
+            if (it.kind === 'assistant')
+              return (
+                <div key={i} className="msg-wrap assistant">
+                  <div className="msg assistant">
+                    <Markdown text={it.text} />
+                  </div>
+                  <MsgMeta at={it.at} copied={copiedIdx === i} onCopy={() => copyMessage(it.text, i)} />
+                </div>
+              )
             if (it.kind === 'memory')
               return (
                 <div key={i} className="memcard">
@@ -351,6 +466,20 @@ export default function ChatView(): JSX.Element {
           })}
           <div ref={bottomRef} />
         </div>
+        {selPop && (
+          <button
+            className="selquote-btn"
+            style={{ left: selPop.x, top: selPop.y }}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setQuote(selPop.text)
+              setSelPop(null)
+              window.getSelection()?.removeAllRanges()
+            }}
+          >
+            ❝ 인용해서 질문
+          </button>
+        )}
         {runningTasks.length > 0 && (
           <>
             <div className="taskbar">
@@ -387,6 +516,15 @@ export default function ChatView(): JSX.Element {
           </>
         )}
         {error && <div className="error-banner">{error}</div>}
+        {quote && (
+          <div className="quote-bar">
+            <div className="qmark">❝</div>
+            <div className="qtext">{quote}</div>
+            <button className="chip-cancel" onClick={() => setQuote(null)} title="인용 제거">
+              ×
+            </button>
+          </div>
+        )}
         {pending.length > 0 && (
           <div className="attach-bar">
             {pending.map((p, i) => (

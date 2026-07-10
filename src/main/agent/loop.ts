@@ -110,7 +110,12 @@ export async function runTurn(
 
   // 사용자 메시지를 먼저 저장하고, 이후에는 append만 한다
   // (백그라운드 작업이 같은 세션에 동시 기록해도 서로 덮어쓰지 않도록)
-  session.items.push({ kind: 'user', text: userText, ...(metas.length > 0 ? { attachments: metas } : {}) })
+  session.items.push({
+    kind: 'user',
+    text: userText,
+    at: new Date().toISOString(),
+    ...(metas.length > 0 ? { attachments: metas } : {})
+  })
   session.messages.push({
     role: 'user',
     content: parts.length > 0 ? [...parts, { type: 'text', text: userText }] : userText
@@ -188,7 +193,7 @@ export async function runTurn(
     const response = await result.response
     const newItems: ChatItem[] = [...toolItems.values()]
     if (assistantText) {
-      newItems.push({ kind: 'assistant', text: assistantText })
+      newItems.push({ kind: 'assistant', text: assistantText, at: new Date().toISOString() })
       transcript.push(`에이전트: ${assistantText}`)
     }
     appendToSession(sessionId, newItems, response.messages)
@@ -214,7 +219,7 @@ export async function runTurn(
     // 오류·중단으로 끝난 턴: 아직 '실행 중'인 도구 카드를 '중단됨'으로 확정한다
     const unresolved = resolveDanglingTools(toolItems)
     const newItems: ChatItem[] = [...toolItems.values()]
-    if (assistantText) newItems.push({ kind: 'assistant', text: assistantText })
+    if (assistantText) newItems.push({ kind: 'assistant', text: assistantText, at: new Date().toISOString() })
     appendToSession(sessionId, newItems, [])
     send({
       type: 'turn-end',
