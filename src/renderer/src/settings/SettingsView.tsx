@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import type {
   AuditRecord,
+  McpServerConfig,
+  McpTransportKind,
   ModelTier,
   PermissionRule,
   ProviderConfig,
   ProviderType,
+  SecretMeta,
   TierAssignment
 } from '@shared/types'
 
@@ -39,6 +42,28 @@ const emptyForm = (): ProviderConfig & { apiKey: string } => ({
   apiKey: ''
 })
 
+const emptyMcpForm = (): {
+  name: string
+  transport: McpTransportKind
+  command: string
+  url: string
+  headersJson: string
+  envJson: string
+} => ({ name: '', transport: 'stdio', command: '', url: '', headersJson: '', envJson: '' })
+
+/** JSON 오브젝트 입력(선택)을 파싱. 비어 있으면 undefined, 잘못됐으면 오류 던짐 */
+function parseRecord(label: string, json: string): Record<string, string> | undefined {
+  const t = json.trim()
+  if (!t) return undefined
+  const parsed = JSON.parse(t) as unknown
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${label}은 {"키":"값"} 형태여야 합니다.`)
+  }
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(parsed)) out[k] = String(v)
+  return out
+}
+
 export default function SettingsView(): JSX.Element {
   const [providers, setProviders] = useState<ProviderConfig[]>([])
   const [tiers, setTiers] = useState<TierAssignment>({ light: null, standard: null, advanced: null })
@@ -46,6 +71,12 @@ export default function SettingsView(): JSX.Element {
   const [rules, setRules] = useState<PermissionRule[]>([])
   const [audit, setAudit] = useState<AuditRecord[]>([])
   const [saved, setSaved] = useState(false)
+  const [secrets, setSecrets] = useState<SecretMeta[]>([])
+  const [secForm, setSecForm] = useState({ name: '', value: '' })
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([])
+  const [mcpForm, setMcpForm] = useState(emptyMcpForm())
+  const [mcpError, setMcpError] = useState<string | null>(null)
+  const [testing, setTesting] = useState<string | null>(null)
 
   const refresh = async (): Promise<void> => {
     const p = await window.api.listProviders()
@@ -53,6 +84,55 @@ export default function SettingsView(): JSX.Element {
     setTiers(p.tiers)
     setRules(await window.api.listRules())
     setAudit(await window.api.listAudit())
+    setSecrets(await window.api.listSecrets())
+    setMcpServers(await window.api.mcpList())
+  }
+
+  const addSecret = async (): Promise<void> => {
+    if (!secForm.name.trim() || !secForm.value.trim()) return
+    await window.api.setSecret(secForm.name.trim(), secForm.value)
+    setSecForm({ name: '', value: '' })
+    await refresh()
+  }
+
+  const addMcp = async (): Promise<void> => {
+    setMcpError(null)
+    if (!mcpForm.name.trim()) return
+    try {
+      const cfg: McpServerConfig = {
+        id: crypto.randomUUID(),
+        name: mcpForm.name.trim(),
+        transport: mcpForm.transport,
+        enabled: true,
+        createdAt: new Date().toISOString()
+      }
+      if (mcpForm.transport === 'stdio') {
+        const parts = mcpForm.command.trim().split(/\s+/)
+        if (parts.length === 0 || !parts[0]) throw new Error('실행 명령을 입력하세요.')
+        cfg.command = parts[0]
+        cfg.args = parts.slice(1)
+        cfg.env = parseRecord('환경 변수', mcpForm.envJson)
+      } else {
+        if (!mcpForm.url.trim()) throw new Error('서버 URL을 입력하세요.')
+        cfg.url = mcpForm.url.trim()
+        cfg.headers = parseRecord('헤더', mcpForm.headersJson)
+      }
+      await window.api.mcpSave(cfg)
+      setMcpForm(emptyMcpForm())
+      await refresh()
+    } catch (e) {
+      setMcpError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const runTest = async (id: string): Promise<void> => {
+    setTesting(id)
+    try {
+      await window.api.mcpTest(id)
+    } finally {
+      setTesting(null)
+      await refresh()
+    }
   }
 
   useEffect(() => {
@@ -198,6 +278,150 @@ export default function SettingsView(): JSX.Element {
         <div className="row">
           <button className="primary" onClick={() => void save()}>추가</button>
           {saved && <span style={{ color: 'var(--ok)' }}>저장됨</span>}
+        </div>
+      </div>
+
+      <h2>연동 시크릿</h2>
+      <div className="card">
+        <div style={{ color: 'var(--text-dim)', fontSize: 13, marginBottom: 10 }}>
+          외부 서비스 토큰·키를 OS 키체인에 암호화 저장합니다. 에이전트는 이름만 볼 수 있고, 도구 실행 시{' '}
+          <code>{'{{secret:이름}}'}</code> 플레이스홀더가 실제 값으로 치환됩니다.
+        </div>
+        {secrets.length > 0 && (
+          <table>
+            <thead>
+              <tr><th>이름</th><th>등록일</th><th></th></tr>
+            </thead>
+            <tbody>
+              {secrets.map((s) => (
+                <tr key={s.name}>
+                  <td>{s.name}</td>
+                  <td className="dim">{new Date(s.createdAt).toLocaleDateString()}</td>
+                  <td>
+                    <button className="danger" onClick={() => void window.api.deleteSecret(s.name).then(refresh)}>
+                      삭제
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="row" style={{ marginTop: 10 }}>
+          <input
+            placeholder="이름 (예: notion)"
+            value={secForm.name}
+            onChange={(e) => setSecForm({ ...secForm, name: e.target.value })}
+          />
+          <input
+            type="password"
+            placeholder="토큰/키 값"
+            style={{ flex: 1 }}
+            value={secForm.value}
+            onChange={(e) => setSecForm({ ...secForm, value: e.target.value })}
+          />
+          <button className="primary" onClick={() => void addSecret()}>추가</button>
+        </div>
+      </div>
+
+      <h2>MCP 서버</h2>
+      <div className="card">
+        <div style={{ color: 'var(--text-dim)', fontSize: 13, marginBottom: 10 }}>
+          등록된 MCP 서버의 도구는 백그라운드 워커가 사용합니다 (호출 시마다 승인 게이트 통과). 에이전트가 대화 중
+          직접 등록할 수도 있습니다.
+        </div>
+        {mcpServers.length > 0 && (
+          <table>
+            <thead>
+              <tr><th>이름</th><th>연결</th><th>상태</th><th>사용</th><th></th></tr>
+            </thead>
+            <tbody>
+              {mcpServers.map((s) => (
+                <tr key={s.id}>
+                  <td>{s.name}</td>
+                  <td className="dim">
+                    {s.transport === 'stdio' ? `${s.command ?? ''} ${(s.args ?? []).join(' ')}` : s.url}
+                  </td>
+                  <td className="dim">
+                    {s.lastStatus
+                      ? s.lastStatus.ok
+                        ? `정상 (도구 ${s.lastStatus.tools?.length ?? 0}개)`
+                        : `오류: ${s.lastStatus.error?.slice(0, 60)}`
+                      : '-'}
+                  </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={s.enabled}
+                      onChange={(e) => void window.api.mcpSave({ ...s, enabled: e.target.checked }).then(refresh)}
+                    />
+                  </td>
+                  <td>
+                    <div className="row">
+                      <button disabled={testing === s.id} onClick={() => void runTest(s.id)}>
+                        {testing === s.id ? '테스트 중…' : '테스트'}
+                      </button>
+                      <button className="danger" onClick={() => void window.api.mcpDelete(s.id).then(refresh)}>
+                        삭제
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="grid-form" style={{ marginTop: 10 }}>
+          <span>이름</span>
+          <input
+            placeholder="예: notion"
+            value={mcpForm.name}
+            onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })}
+          />
+          <span>방식</span>
+          <select
+            value={mcpForm.transport}
+            onChange={(e) => setMcpForm({ ...mcpForm, transport: e.target.value as McpTransportKind })}
+          >
+            <option value="stdio">로컬 명령 (stdio)</option>
+            <option value="http">원격 서버 (http)</option>
+          </select>
+          {mcpForm.transport === 'stdio' ? (
+            <>
+              <span>명령</span>
+              <input
+                placeholder="예: npx -y @notionhq/notion-mcp-server"
+                value={mcpForm.command}
+                onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })}
+              />
+              <span>환경 변수</span>
+              <input
+                placeholder={'JSON (선택) — 예: {"NOTION_TOKEN": "{{secret:notion}}"}'}
+                value={mcpForm.envJson}
+                onChange={(e) => setMcpForm({ ...mcpForm, envJson: e.target.value })}
+              />
+            </>
+          ) : (
+            <>
+              <span>URL</span>
+              <input
+                placeholder="예: https://mcp.example.com/mcp"
+                value={mcpForm.url}
+                onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })}
+              />
+              <span>헤더</span>
+              <input
+                placeholder={'JSON (선택) — 예: {"Authorization": "Bearer {{secret:notion}}"}'}
+                value={mcpForm.headersJson}
+                onChange={(e) => setMcpForm({ ...mcpForm, headersJson: e.target.value })}
+              />
+            </>
+          )}
+          <span />
+          <div className="row">
+            <button className="primary" onClick={() => void addMcp()}>추가</button>
+            {mcpError && <span style={{ color: 'var(--danger)', fontSize: 13 }}>{mcpError}</span>}
+          </div>
         </div>
       </div>
 

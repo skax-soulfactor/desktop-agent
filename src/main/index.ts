@@ -3,6 +3,7 @@ import { join } from 'path'
 import { registerIpc } from './ipc'
 import { startScheduler } from './agent/scheduler'
 import { initNetwork } from './network/manager'
+import { closeAllMcpConnections } from './mcp/manager'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -49,4 +50,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('will-quit', () => {
+  void closeAllMcpConnections()
 })

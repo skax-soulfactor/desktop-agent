@@ -8,6 +8,7 @@ import type {
   ChatItem,
   ClarifyRequest,
   InboundRecord,
+  McpServerConfig,
   MemoryEntry,
   ModelTier,
   NetworkConfig,
@@ -16,6 +17,8 @@ import type {
   PermissionRule,
   ProviderConfig,
   Schedule,
+  SecretMeta,
+  SecretRequest,
   SessionMeta,
   TaskInfo,
   TierAssignment
@@ -88,4 +91,18 @@ export interface DesktopAgentApi {
   netListInbound(): Promise<InboundRecord[]>
   onNetworkApproval(cb: (a: NetworkApproval) => void): () => void
   onPeersChanged(cb: () => void): () => void
+
+  // 연동 시크릿 (값은 renderer로 오지 않음)
+  listSecrets(): Promise<SecretMeta[]>
+  setSecret(name: string, value: string): Promise<void>
+  deleteSecret(name: string): Promise<void>
+  secretRespond(requestId: string, value: string | null): Promise<void>
+  secretPending(): Promise<SecretRequest[]>
+  onSecretRequest(cb: (r: SecretRequest) => void): () => void
+
+  // MCP 서버
+  mcpList(): Promise<McpServerConfig[]>
+  mcpSave(config: McpServerConfig): Promise<void>
+  mcpDelete(id: string): Promise<void>
+  mcpTest(id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }>
 }

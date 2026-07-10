@@ -9,6 +9,8 @@ import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
 import { appendToSession } from './sessions'
 import { clarifyTool } from './clarify'
+import { integrationTools } from '../integrations/tools'
+import { mcpToolsFor } from '../mcp/manager'
 
 const MAX_STEPS = 25
 
@@ -71,10 +73,13 @@ export function startTask(
 
 function workerPrompt(): string {
   return [
-    '너는 데스크톱 에이전트의 백그라운드 워커다. 메인 에이전트가 위임한 작업을 도구(파일, 셸)로 끝까지 수행한다.',
+    '너는 데스크톱 에이전트의 백그라운드 워커다. 메인 에이전트가 위임한 작업을 도구(파일, 셸, HTTP, MCP)로 끝까지 수행한다.',
     `실행 환경: ${platform()} / 홈 디렉토리: ${homedir()}`,
     '사소한 정보 부족은 합리적인 기본값을 선택하고 결과 보고에 그 선택을 명시하라. ' +
       '그러나 되돌리기 어렵거나 사용자의 취향·판단이 필요한 갈림길(파일 덮어쓰기, 형식·범위 선택, 중요한 결정)에서는 ask_user로 사용자에게 물어라.',
+    '외부 서비스 API는 http_request로 호출하고, 인증 토큰은 {{secret:이름}} 플레이스홀더로 참조하라 ' +
+      '(저장 여부는 list_secrets로 확인, 없으면 request_secret으로 사용자에게 요청 — 토큰을 채팅으로 받지 마라).',
+    'mcp_로 시작하는 도구는 등록된 MCP 서버의 기능이다. 해당 서비스 작업에 적극 활용하라.',
     '도구 승인이 거부되면 다른 방법을 시도하거나, 불가능하면 중단하고 이유를 보고하라.',
     '마지막 응답은 결과 보고여야 한다: 무엇을 했고, 무엇이 만들어졌으며, 미완이 있다면 무엇이 남았는지.'
   ].join('\n')
@@ -114,11 +119,19 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
       }
     })
 
+    // MCP 도구는 연결이 필요하므로 비동기 수집 — 연결 실패 서버는 건너뛴다
+    const mcpTools = await mcpToolsFor(ctx)
+
     const result = streamText({
       model,
       system,
       prompt: instruction,
-      tools: { ...buildTools(ctx), ...clarify },
+      tools: {
+        ...buildTools(ctx),
+        ...clarify,
+        ...integrationTools(win, info.sessionId),
+        ...mcpTools
+      },
       stopWhen: stepCountIs(MAX_STEPS),
       abortSignal: abort.signal
     })
@@ -138,11 +151,18 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
         }
       } else if (part.type === 'tool-call') {
         const def = toolDefByName(part.toolName)
+        const i = (part.input ?? {}) as Record<string, unknown>
         const summary = def
           ? def.describeCall(part.input as never)
           : part.toolName === 'ask_user'
-            ? `사용자에게 질문: ${String((part.input as { question?: string })?.question ?? '')}`
-            : part.toolName
+            ? `사용자에게 질문: ${String(i.question ?? '')}`
+            : part.toolName === 'request_secret'
+              ? `시크릿 입력 요청: ${String(i.name ?? '')}`
+              : part.toolName === 'add_mcp_server'
+                ? `MCP 서버 등록: ${String(i.name ?? '')}`
+                : part.toolName.startsWith('mcp_')
+                  ? `MCP 도구: ${part.toolName.slice(4)}`
+                  : part.toolName
         const item: ChatItem & { kind: 'tool' } = {
           kind: 'tool',
           toolCallId: part.toolCallId,

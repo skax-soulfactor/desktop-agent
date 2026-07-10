@@ -8,6 +8,7 @@ import type {
   ChatEvent,
   ClarifyRequest,
   InboundRecord,
+  McpServerConfig,
   MemoryEntry,
   ModelTier,
   NetworkConfig,
@@ -16,6 +17,8 @@ import type {
   PermissionRule,
   ProviderConfig,
   Schedule,
+  SecretMeta,
+  SecretRequest,
   SessionMeta,
   TaskInfo,
   TierAssignment
@@ -108,7 +111,26 @@ const api: DesktopAgentApi = {
     const handler = (): void => cb()
     ipcRenderer.on('network:peers-changed', handler)
     return () => ipcRenderer.removeListener('network:peers-changed', handler)
-  }
+  },
+
+  listSecrets: (): Promise<SecretMeta[]> => ipcRenderer.invoke('secrets:list'),
+  setSecret: (name: string, value: string): Promise<void> =>
+    ipcRenderer.invoke('secrets:set', name, value),
+  deleteSecret: (name: string): Promise<void> => ipcRenderer.invoke('secrets:delete', name),
+  secretRespond: (requestId: string, value: string | null): Promise<void> =>
+    ipcRenderer.invoke('secrets:respond', requestId, value),
+  secretPending: (): Promise<SecretRequest[]> => ipcRenderer.invoke('secrets:pending'),
+  onSecretRequest: (cb: (r: SecretRequest) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, r: SecretRequest): void => cb(r)
+    ipcRenderer.on('secret:request', handler)
+    return () => ipcRenderer.removeListener('secret:request', handler)
+  },
+
+  mcpList: (): Promise<McpServerConfig[]> => ipcRenderer.invoke('mcp:list'),
+  mcpSave: (config: McpServerConfig): Promise<void> => ipcRenderer.invoke('mcp:save', config),
+  mcpDelete: (id: string): Promise<void> => ipcRenderer.invoke('mcp:delete', id),
+  mcpTest: (id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }> =>
+    ipcRenderer.invoke('mcp:test', id)
 }
 
 contextBridge.exposeInMainWorld('api', api)

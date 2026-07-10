@@ -264,3 +264,40 @@ export interface ClarifyRequest {
   question: string
   options?: string[]
 }
+
+// ─────────────────────────── 외부 서비스 연동 (시크릿 / MCP) ───────────────────────────
+
+/** 저장된 시크릿의 메타 정보 — 값은 renderer/LLM에 절대 노출하지 않는다 */
+export interface SecretMeta {
+  name: string
+  createdAt: string
+}
+
+/** 에이전트가 사용자에게 시크릿(API 토큰 등) 입력을 요청 — 값은 메인 프로세스로만 전달된다 */
+export interface SecretRequest {
+  requestId: string
+  /** 저장될 시크릿 이름 (예: notion) */
+  name: string
+  /** 왜 필요한지, 어디서 발급받는지 에이전트가 설명 */
+  purpose: string
+}
+
+export type McpTransportKind = 'stdio' | 'http'
+
+/** 등록된 MCP 서버 — env/headers 값에 {{secret:이름}} 플레이스홀더 사용 가능 */
+export interface McpServerConfig {
+  id: string
+  name: string
+  transport: McpTransportKind
+  /** stdio: 실행 명령 (예: npx) */
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  /** http: 서버 URL (Streamable HTTP 우선, SSE 폴백) */
+  url?: string
+  headers?: Record<string, string>
+  enabled: boolean
+  /** 마지막 연결 시도 결과 (성공 시 도구 이름 목록) */
+  lastStatus?: { ok: boolean; tools?: string[]; error?: string; at: string }
+  createdAt: string
+}

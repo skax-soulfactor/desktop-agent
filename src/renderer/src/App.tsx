@@ -7,6 +7,7 @@ import SchedulesView from './schedules/SchedulesView'
 import NetworkView from './network/NetworkView'
 import NetworkApprovalModal from './network/NetworkApprovalModal'
 import ClarifyModal from './clarify/ClarifyModal'
+import SecretModal from './secrets/SecretModal'
 
 type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'settings'
 
@@ -43,6 +44,7 @@ export default function App(): JSX.Element {
       <ApprovalModal />
       <NetworkApprovalModal />
       <ClarifyModal />
+      <SecretModal />
     </>
   )
 }

@@ -3,10 +3,11 @@ import type { BrowserWindow } from 'electron'
 import type { DesktopToolDef } from './defs'
 import { fsRead, fsWrite, fsList } from './fs'
 import { shellExec } from './shell'
+import { httpRequest } from './http'
 import { checkPermission } from '../permissions/gateway'
 import type { FailureSignal } from '../memory/extract'
 
-export const allToolDefs: DesktopToolDef[] = [fsRead, fsWrite, fsList, shellExec]
+export const allToolDefs: DesktopToolDef[] = [fsRead, fsWrite, fsList, shellExec, httpRequest]
 
 export function toolDefByName(name: string): DesktopToolDef | undefined {
   return allToolDefs.find((d) => d.name === name)

@@ -30,6 +30,11 @@ import {
   pairWithAddress,
   respondNetworkApproval
 } from './network/manager'
+import { listSecrets, setSecret, deleteSecret } from './secrets/store'
+import { respondSecretRequest, pendingSecretRequests } from './secrets/request'
+import { listMcpServers, saveMcpServer, deleteMcpServer } from './mcp/store'
+import { testMcpServer, invalidateMcpConnection } from './mcp/manager'
+import type { McpServerConfig } from '@shared/types'
 
 export function registerIpc(getWin: () => BrowserWindow): void {
   // 채팅
@@ -104,4 +109,25 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     respondNetworkApproval(requestId, approved)
   )
   ipcMain.handle('net:listInbound', () => listInbound(100))
+
+  // 연동 시크릿 — 값은 renderer로 절대 반환하지 않는다 (이름 목록만)
+  ipcMain.handle('secrets:list', () => listSecrets())
+  ipcMain.handle('secrets:set', (_e, name: string, value: string) => setSecret(name, value))
+  ipcMain.handle('secrets:delete', (_e, name: string) => deleteSecret(name))
+  ipcMain.handle('secrets:respond', (_e, requestId: string, value: string | null) =>
+    respondSecretRequest(requestId, value)
+  )
+  ipcMain.handle('secrets:pending', () => pendingSecretRequests())
+
+  // MCP 서버
+  ipcMain.handle('mcp:list', () => listMcpServers())
+  ipcMain.handle('mcp:save', async (_e, config: McpServerConfig) => {
+    saveMcpServer(config)
+    await invalidateMcpConnection(config.id)
+  })
+  ipcMain.handle('mcp:delete', async (_e, id: string) => {
+    deleteMcpServer(id)
+    await invalidateMcpConnection(id)
+  })
+  ipcMain.handle('mcp:test', (_e, id: string) => testMcpServer(id))
 }

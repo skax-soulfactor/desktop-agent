@@ -13,6 +13,7 @@ import { taskTools, listTasks } from './tasks'
 import { scheduleTools } from './scheduler'
 import { memoryTools } from '../memory/tools'
 import { peerTools, buildPeerContext } from '../network/peerTools'
+import { integrationTools } from '../integrations/tools'
 
 const MAX_STEPS = 25
 
@@ -49,6 +50,19 @@ function baseSystemPrompt(sessionId: string): string {
     '- 메시지에 첨부(이미지, PDF, 문서 본문)가 포함되면 내용을 직접 읽고 처리하라(번역·요약·분석은 위임 없이 직접). 결과를 파일로 저장해야 하면 결과 본문을 instruction에 포함해 저장 작업만 위임하라. 워커는 첨부를 볼 수 없다.',
     '- 요청이 내 전문 밖이고 연결된 피어 에이전트가 적합하면 ask_peer(질의) 또는 delegate_to_peer(작업 위임)를 사용하라.',
     '',
+    '## 외부 서비스 연동 규칙 (예: 노션, 슬랙, 옵시디안, 구글 등)',
+    '- 사용자가 외부 서비스 연동·통합을 요청하면 바로 실행하지 말고, 먼저 가능한 연동 방식들을 조사해 나열하라.',
+    '  일반적 선택지: ① 로컬 파일/앱 직접 조작 (예: 옵시디안 vault는 로컬 마크다운 폴더), ② 해당 앱의 플러그인 설치·설정,',
+    '  ③ 공식 REST API 호출 (http_request + 시크릿), ④ MCP 서버 연동 (add_mcp_server).',
+    '- 각 방식의 장단점(설정 난이도, 안정성, 유지보수)을 짧게 비교하고 상황에 맞는 최적안을 "추천"으로 명시한 뒤 사용자의 선택을 받아라.',
+    '- 사용자가 방식을 고르면 단계별로 진행하라. 필요한 정보가 나올 때마다 사용자에게 물어라.',
+    '- API 토큰 등 비밀값은 절대 채팅으로 받지 말고 request_secret으로 요청하라 (값은 너에게 노출되지 않고 키체인에 저장된다).',
+    '  이미 있는지는 list_secrets로 확인하고, 저장된 시크릿은 http_request 헤더나 MCP 설정에 {{secret:이름}}으로 참조하라.',
+    '- MCP 연동을 선택하면: 해당 서비스의 MCP 서버(공식 우선)를 확인하고, 필요한 시크릿을 확보한 뒤 add_mcp_server로 등록하라.',
+    '  등록이 성공하면 반환된 도구 목록을 사용자에게 알려라. 등록된 MCP 도구는 위임된 워커가 사용한다.',
+    '- 플러그인 설치·파일 작업·API 호출 등 실행 작업은 delegate_task로 위임하되, 연동 방식 결정과 시크릿 확보는 위임 전에 대화에서 끝내라.',
+    '- 연동이 완료되면 확인 방법(간단한 테스트)을 제안하고, 연동 구성(방식·시크릿 이름·MCP 서버명)을 save_memory로 기억하라.',
+    '',
     '모든 도구 호출은 사용자의 승인을 거친다. 거부되면 이유를 존중하고 다른 방법을 제안하라.',
     '응답은 사용자의 언어로 한다.'
   ]
@@ -81,6 +95,10 @@ function summarizeCall(toolName: string, input: unknown): string {
   if (toolName === 'list_peers') return '피어 에이전트 목록 조회'
   if (toolName === 'ask_peer') return `피어에게 질의: ${String(i.question ?? '').slice(0, 40)}`
   if (toolName === 'delegate_to_peer') return `피어에게 작업 위임: ${String(i.title ?? '')}`
+  if (toolName === 'list_secrets') return '시크릿 이름 목록 조회'
+  if (toolName === 'request_secret') return `시크릿 입력 요청: ${String(i.name ?? '')}`
+  if (toolName === 'list_mcp_servers') return 'MCP 서버 목록 조회'
+  if (toolName === 'add_mcp_server') return `MCP 서버 등록: ${String(i.name ?? '')}`
   return toolName
 }
 
@@ -147,7 +165,8 @@ export async function runTurn(
         ...taskTools(win, sessionId),
         ...scheduleTools(sessionId),
         ...memoryTools(win, sessionId),
-        ...peerTools()
+        ...peerTools(),
+        ...integrationTools(win, sessionId)
       },
       stopWhen: stepCountIs(MAX_STEPS),
       abortSignal: abort.signal
