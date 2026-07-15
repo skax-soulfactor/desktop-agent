@@ -1,5 +1,5 @@
 import type { ModelMessage } from 'ai'
-import type { ChatItem, SessionMeta } from '@shared/types'
+import type { ChatItem, SessionMeta, SessionSearchHit } from '@shared/types'
 import { readJson, writeJson, deleteFile, listFiles } from '../storage/jsonStore'
 
 export interface SessionData {
@@ -40,6 +40,45 @@ export function saveSession(data: SessionData): void {
 
 export function deleteSession(id: string): void {
   deleteFile(`sessions/${id}.json`)
+}
+
+/** 일치 지점 주변을 잘라 발췌를 만든다 */
+function makeSnippet(text: string, pos: number, matchLen: number): string {
+  const CONTEXT = 40
+  const start = Math.max(0, pos - CONTEXT)
+  const end = Math.min(text.length, pos + matchLen + CONTEXT)
+  const head = start > 0 ? '…' : ''
+  const tail = end < text.length ? '…' : ''
+  return head + text.slice(start, end).replace(/\n+/g, ' ') + tail
+}
+
+/**
+ * 모든 세션의 제목과 사용자/에이전트 메시지를 대소문자 구분 없이 검색한다.
+ * 최근 대화 순으로 훑고, 세션당 메시지 일치는 여러 건 나올 수 있다.
+ */
+export function searchSessions(query: string, limit = 50): SessionSearchHit[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  const hits: SessionSearchHit[] = []
+  const sessions = listFiles('sessions')
+    .map((f) => readJson<SessionData | null>(`sessions/${f}`, null))
+    .filter((s): s is SessionData => s !== null)
+    .sort((a, b) => b.meta.updatedAt.localeCompare(a.meta.updatedAt))
+  for (const s of sessions) {
+    if (hits.length >= limit) break
+    const base = { sessionId: s.meta.id, title: s.meta.title, updatedAt: s.meta.updatedAt }
+    if (s.meta.title.toLowerCase().includes(q)) {
+      hits.push({ ...base, itemIndex: -1, kind: 'title', snippet: s.meta.title })
+    }
+    for (let i = 0; i < s.items.length && hits.length < limit; i++) {
+      const it = s.items[i]
+      if (it.kind !== 'user' && it.kind !== 'assistant') continue
+      const pos = it.text.toLowerCase().indexOf(q)
+      if (pos < 0) continue
+      hits.push({ ...base, itemIndex: i, kind: it.kind, snippet: makeSnippet(it.text, pos, q.length) })
+    }
+  }
+  return hits
 }
 
 /**

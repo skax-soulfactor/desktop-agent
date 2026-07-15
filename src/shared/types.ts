@@ -25,6 +25,18 @@ export interface SessionMeta {
   updatedAt: string
 }
 
+/** 대화 기록 검색 결과 한 건 */
+export interface SessionSearchHit {
+  sessionId: string
+  title: string
+  updatedAt: string
+  /** 일치한 메시지의 items 인덱스 (제목 일치는 -1) */
+  itemIndex: number
+  kind: 'title' | 'user' | 'assistant'
+  /** 일치 지점 주변 발췌 */
+  snippet: string
+}
+
 /** 렌더러 → 메인으로 전송되는 첨부 파일 */
 export interface AttachmentPayload {
   name: string

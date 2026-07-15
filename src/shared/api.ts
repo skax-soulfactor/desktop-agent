@@ -20,6 +20,7 @@ import type {
   SecretMeta,
   SecretRequest,
   SessionMeta,
+  SessionSearchHit,
   TaskInfo,
   TierAssignment
 } from './types'
@@ -60,6 +61,7 @@ export interface DesktopAgentApi {
   createSession(): Promise<SessionDataDto>
   getSession(id: string): Promise<SessionDataDto | null>
   deleteSession(id: string): Promise<void>
+  searchSessions(query: string): Promise<SessionSearchHit[]>
 
   listProviders(): Promise<{ providers: ProviderConfig[]; tiers: TierAssignment }>
   saveProvider(config: ProviderConfig, apiKey?: string): Promise<void>

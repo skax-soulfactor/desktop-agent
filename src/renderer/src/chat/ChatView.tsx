@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AttachmentPayload, ChatItem, SessionMeta, TaskInfo } from '@shared/types'
+import type { AttachmentPayload, ChatItem, SessionMeta, SessionSearchHit, TaskInfo } from '@shared/types'
 import Markdown from './Markdown'
 
 interface PendingAttachment extends AttachmentPayload {
@@ -77,6 +77,26 @@ function MsgMeta({
   )
 }
 
+/** 발췌 안의 검색어 첫 일치를 강조 표시 */
+function HighlightedSnippet({ text, query }: { text: string; query: string }): JSX.Element {
+  const q = query.trim().toLowerCase()
+  const pos = q ? text.toLowerCase().indexOf(q) : -1
+  if (pos < 0) return <>{text}</>
+  return (
+    <>
+      {text.slice(0, pos)}
+      <mark>{text.slice(pos, pos + q.length)}</mark>
+      {text.slice(pos + q.length)}
+    </>
+  )
+}
+
+const HIT_KIND_LABEL: Record<SessionSearchHit['kind'], string> = {
+  title: '제목',
+  user: '나',
+  assistant: '에이전트'
+}
+
 const TIER_LABEL: Record<string, string> = { light: '경량', standard: '일반', advanced: '고급' }
 
 const TOOL_STATUS_LABEL: Record<string, string> = {
@@ -140,6 +160,15 @@ export default function ChatView(): JSX.Element {
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 다음 전송에 인용으로 첨부할 선택 텍스트 */
   const [quote, setQuote] = useState<string | null>(null)
+  /** 대화 기록 검색어 — 입력 중이면 사이드바가 검색 결과 모드로 전환된다 */
+  const [search, setSearch] = useState('')
+  /** null = 검색 중(디바운스 대기 포함) */
+  const [searchHits, setSearchHits] = useState<SessionSearchHit[] | null>(null)
+  /** 검색 결과 클릭 시 세션 로드 후 스크롤할 메시지 인덱스 */
+  const pendingScrollIdx = useRef<number | null>(null)
+  /** 잠시 강조 표시할 메시지 인덱스 */
+  const [highlightIdx, setHighlightIdx] = useState<number | null>(null)
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 드래그 선택 위에 띄우는 "인용" 버튼 위치와 대상 텍스트 */
   const [selPop, setSelPop] = useState<{ x: number; y: number; text: string } | null>(null)
 
@@ -260,8 +289,39 @@ export default function ChatView(): JSX.Element {
     })
   }, [])
 
+  // 대화 기록 검색 (디바운스)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (!search.trim()) {
+      setSearchHits(null)
+      return
+    }
+    setSearchHits(null)
+    let cancelled = false
+    const t = setTimeout(() => {
+      void window.api.searchSessions(search).then((hits) => {
+        if (!cancelled) setSearchHits(hits)
+      })
+    }, 200)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [search])
+
+  useEffect(() => {
+    // 검색 결과에서 진입한 경우 해당 메시지로, 그 외에는 맨 아래로 스크롤
+    if (pendingScrollIdx.current !== null) {
+      const idx = pendingScrollIdx.current
+      pendingScrollIdx.current = null
+      document
+        .querySelector(`.messages [data-idx="${idx}"]`)
+        ?.scrollIntoView({ block: 'center' })
+      setHighlightIdx(idx)
+      if (highlightTimer.current) clearTimeout(highlightTimer.current)
+      highlightTimer.current = setTimeout(() => setHighlightIdx(null), 2000)
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [items])
 
   const openSession = async (id: string): Promise<void> => {
@@ -276,6 +336,11 @@ export default function ChatView(): JSX.Element {
       setBusy(await window.api.chatIsRunning(id))
       setRunningTasks((await window.api.listTasks(id)).filter((t) => t.status === 'running'))
     }
+  }
+
+  const openHit = async (hit: SessionSearchHit): Promise<void> => {
+    if (hit.itemIndex >= 0) pendingScrollIdx.current = hit.itemIndex
+    await openSession(hit.sessionId)
   }
 
   const newSession = async (): Promise<void> => {
@@ -354,24 +419,55 @@ export default function ChatView(): JSX.Element {
     <>
       <div className="sidebar">
         <button onClick={() => void newSession()}>+ 새 대화</button>
-        {sessions.map((s) => (
-          <div
-            key={s.id}
-            className={`session ${s.id === activeId ? 'active' : ''}`}
-            onClick={() => void openSession(s.id)}
-          >
-            <span>{s.title}</span>
-            <button
-              className="del"
-              onClick={(e) => {
-                e.stopPropagation()
-                void removeSession(s.id)
-              }}
-            >
+        <div className="search-box">
+          <input
+            value={search}
+            placeholder="대화 기록 검색"
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setSearch('')
+            }}
+          />
+          {search && (
+            <button className="clear" title="검색 지우기" onClick={() => setSearch('')}>
               ×
             </button>
+          )}
+        </div>
+        {search.trim() ? (
+          <div className="search-results">
+            {searchHits === null && <div className="search-note">검색 중…</div>}
+            {searchHits?.length === 0 && <div className="search-note">일치하는 대화가 없습니다.</div>}
+            {searchHits?.map((h, i) => (
+              <div key={i} className="search-hit" onClick={() => void openHit(h)}>
+                <div className="hit-title">{h.title}</div>
+                <div className="hit-snippet">
+                  <span className="hit-kind">{HIT_KIND_LABEL[h.kind]}</span>
+                  <HighlightedSnippet text={h.snippet} query={search} />
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
+        ) : (
+          sessions.map((s) => (
+            <div
+              key={s.id}
+              className={`session ${s.id === activeId ? 'active' : ''}`}
+              onClick={() => void openSession(s.id)}
+            >
+              <span>{s.title}</span>
+              <button
+                className="del"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void removeSession(s.id)
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))
+        )}
       </div>
       <div
         className="main"
@@ -389,7 +485,7 @@ export default function ChatView(): JSX.Element {
             if (it.kind === 'user') {
               const { quote: q, body } = splitLeadingQuote(it.text)
               return (
-                <div key={i} className="msg-wrap user">
+                <div key={i} data-idx={i} className={`msg-wrap user ${highlightIdx === i ? 'hl' : ''}`}>
                   <div className="msg user">
                     {q && <div className="uquote">{q}</div>}
                     {body}
@@ -409,7 +505,7 @@ export default function ChatView(): JSX.Element {
             }
             if (it.kind === 'assistant')
               return (
-                <div key={i} className="msg-wrap assistant">
+                <div key={i} data-idx={i} className={`msg-wrap assistant ${highlightIdx === i ? 'hl' : ''}`}>
                   <div className="msg assistant">
                     <Markdown text={it.text} />
                   </div>

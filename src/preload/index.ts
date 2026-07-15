@@ -20,6 +20,7 @@ import type {
   SecretMeta,
   SecretRequest,
   SessionMeta,
+  SessionSearchHit,
   TaskInfo,
   TierAssignment
 } from '@shared/types'
@@ -66,6 +67,8 @@ const api: DesktopAgentApi = {
   createSession: (): Promise<SessionDataDto> => ipcRenderer.invoke('sessions:create'),
   getSession: (id: string): Promise<SessionDataDto | null> => ipcRenderer.invoke('sessions:get', id),
   deleteSession: (id: string): Promise<void> => ipcRenderer.invoke('sessions:delete', id),
+  searchSessions: (query: string): Promise<SessionSearchHit[]> =>
+    ipcRenderer.invoke('sessions:search', query),
 
   listProviders: (): Promise<{ providers: ProviderConfig[]; tiers: TierAssignment }> =>
     ipcRenderer.invoke('providers:list'),
