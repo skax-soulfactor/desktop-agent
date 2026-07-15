@@ -185,6 +185,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .toolcard .badge.denied, .toolcard .badge.error { color: var(--danger); border-color: var(--danger); }
 .toolcard .badge.aborted { color: var(--text-dim); border-color: var(--text-dim); }
 .toolcard pre { margin-top: 8px; padding: 8px; background: var(--bg); border-radius: 6px; overflow-x: auto; font-size: 12px; color: var(--text-dim); max-height: 160px; overflow-y: auto; }
+/* 워커 작업 결과 — 마크다운으로 렌더링 */
+.toolcard .task-result { margin-top: 8px; padding: 10px 12px; background: var(--bg); border-radius: 6px; font-size: 13px; }
+.toolcard .task-result pre { margin-top: 0; max-height: none; }
 
 .memcard { align-self: center; font-size: 12px; color: var(--text-dim); background: var(--panel); border: 1px dashed var(--border); border-radius: 10px; padding: 6px 12px; }
 .memcard.notice { color: var(--warn); border-color: var(--warn); }

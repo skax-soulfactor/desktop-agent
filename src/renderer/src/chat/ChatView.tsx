@@ -554,7 +554,11 @@ export default function ChatView(): JSX.Element {
                     )}
                   </div>
                   {logOpen && it.log && <WorkLog items={it.log} />}
-                  {it.result && <pre>{it.result}</pre>}
+                  {it.result && (
+                    <div className="task-result">
+                      <Markdown text={it.result} />
+                    </div>
+                  )}
                 </div>
               )
             }
