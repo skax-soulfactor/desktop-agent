@@ -2,6 +2,7 @@ import { tool, type ToolSet } from 'ai'
 import { z } from 'zod'
 import type { BrowserWindow } from 'electron'
 import type { ClarifyRequest } from '@shared/types'
+import { notifyIfBackground } from '../notify'
 
 interface Pending {
   resolve: (answer: string) => void
@@ -77,6 +78,7 @@ export function clarifyTool(ctx: ClarifyContext): ToolSet {
             openRequests.push(req)
             ctx.abortSignal.addEventListener('abort', onAbort, { once: true })
             ctx.win.webContents.send('clarify:request', req)
+            notifyIfBackground(ctx.win, `질문: ${ctx.taskTitle}`, question)
           })
           return { answer }
         } finally {

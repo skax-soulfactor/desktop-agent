@@ -9,6 +9,7 @@ import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
 import { appendToSession, addSessionUsage } from './sessions'
 import { recordUsage } from '../usage/store'
+import { notifyIfBackground } from '../notify'
 import { clarifyTool } from './clarify'
 import { integrationTools } from '../integrations/tools'
 import { mcpToolsFor } from '../mcp/manager'
@@ -198,6 +199,7 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
       totalUsage
     )
     addSessionUsage(info.sessionId, rec.inputTokens, rec.outputTokens)
+    info.usage = { input: rec.inputTokens, output: rec.outputTokens }
     finishTask(win, info, 'done', finalText.trim() || '작업이 완료되었습니다.')
   } catch (e) {
     // 중단·오류 시 아직 '실행 중'인 도구 카드를 확정해 로그가 모순 없이 남게 한다
@@ -225,6 +227,10 @@ function finishTask(win: BrowserWindow, info: TaskInfo, status: TaskStatus, resu
   info.detail = undefined
   info.finishedAt = new Date().toISOString()
   emit(win, info)
+  // 취소는 사용자가 직접 한 행동이므로 알리지 않는다
+  if (status !== 'cancelled') {
+    notifyIfBackground(win, `작업 ${STATUS_LABEL[status]}: ${info.title}`, info.result)
+  }
 
   // 결과 카드(작업 과정 로그 포함)를 대화에 남기고,
   // 메인 에이전트가 다음 턴에서 결과를 인지하도록 알림 메시지를 히스토리에 추가
@@ -237,7 +243,8 @@ function finishTask(win: BrowserWindow, info: TaskInfo, status: TaskStatus, resu
         title: info.title,
         status,
         result: info.result,
-        log: info.log?.map((x) => ({ ...x }))
+        log: info.log?.map((x) => ({ ...x })),
+        ...(info.usage ? { usage: info.usage } : {})
       }
     ],
     [

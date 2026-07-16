@@ -96,6 +96,8 @@ export type ChatItem =
       result?: string
       /** 워커의 작업 과정 (도구 호출·중간 텍스트) — 완료 후에도 펼쳐볼 수 있다 */
       log?: ChatItem[]
+      /** 이 작업 전체에서 워커가 사용한 토큰 */
+      usage?: TokenUsage
     }
 
 export type TaskStatus = 'running' | 'done' | 'failed' | 'cancelled'
@@ -114,6 +116,8 @@ export interface TaskInfo {
   log?: ChatItem[]
   /** 이 작업에 사용된 모델 등급 */
   tier?: ModelTier
+  /** 종료 시 이 작업 전체에서 사용한 토큰 */
+  usage?: TokenUsage
   createdAt: string
   finishedAt?: string
 }

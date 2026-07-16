@@ -284,7 +284,15 @@ export default function ChatView(): JSX.Element {
           setExpandedTaskId((prev) => (prev === t.id ? null : prev))
           setItems((prev) => [
             ...prev,
-            { kind: 'task', taskId: t.id, title: t.title, status: t.status, result: t.result, log: t.log }
+            {
+              kind: 'task',
+              taskId: t.id,
+              title: t.title,
+              status: t.status,
+              result: t.result,
+              log: t.log,
+              usage: t.usage
+            }
           ])
         }
       } else if (e.type === 'turn-end') {
@@ -583,6 +591,14 @@ export default function ChatView(): JSX.Element {
                       {it.status === 'done' ? '작업 완료' : it.status === 'cancelled' ? '작업 취소됨' : '작업 실패'}
                     </span>
                     <span>{it.title}</span>
+                    {it.usage && (
+                      <span
+                        className="tokens"
+                        title="이 작업에서 워커가 사용한 토큰 — 입력 ↑ / 출력 ↓"
+                      >
+                        ↑{fmtTokens(it.usage.input)} ↓{fmtTokens(it.usage.output)}
+                      </span>
+                    )}
                     {it.log && it.log.length > 0 && (
                       <button
                         className="loglink"

@@ -3,6 +3,7 @@ import type { ApprovalDecision, ApprovalRequest, RiskLevel } from '@shared/types
 import { addRule, evaluate } from './policies'
 import { logAudit } from './audit'
 import { searchLessons } from '../memory/store'
+import { notifyIfBackground } from '../notify'
 
 /** 규칙과 무관하게 항상 차단하는 파괴적 명령 (셸 도구용) */
 const HARD_BLOCKLIST = [
@@ -45,6 +46,7 @@ function askUser(win: BrowserWindow, req: ApprovalRequest): Promise<ApprovalDeci
     )
     pending.set(req.requestId, { resolve, timer })
     win.webContents.send('approval:request', req)
+    notifyIfBackground(win, '도구 실행 승인 필요', req.summary)
   })
 }
 

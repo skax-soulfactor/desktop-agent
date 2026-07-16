@@ -1,6 +1,7 @@
 import type { BrowserWindow } from 'electron'
 import type { SecretRequest } from '@shared/types'
 import { setSecret } from './store'
+import { notifyIfBackground } from '../notify'
 
 /**
  * 에이전트가 시크릿 입력을 요청하면 renderer에 모달을 띄우고 답을 기다린다.
@@ -61,5 +62,6 @@ export function requestSecretFromUser(
     pending.set(req.requestId, { name, resolve, timer })
     openRequests.push(req)
     win.webContents.send('secret:request', req)
+    notifyIfBackground(win, `시크릿 입력 요청: ${name}`, purpose)
   })
 }

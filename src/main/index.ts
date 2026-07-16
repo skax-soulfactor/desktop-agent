@@ -35,6 +35,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Windows 알림(Notification)은 AppUserModelID가 있어야 표시된다
+  if (process.platform === 'win32') app.setAppUserModelId('com.desktop-agent.app')
   registerIpc(() => {
     if (!mainWindow) throw new Error('window not ready')
     return mainWindow
