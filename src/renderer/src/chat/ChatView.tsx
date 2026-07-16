@@ -619,6 +619,15 @@ export default function ChatView(): JSX.Element {
                   {it.result && (
                     <div className="task-result">
                       <Markdown text={it.result} />
+                      <div className="msg-meta">
+                        <button
+                          className="copy"
+                          title="결과 마크다운 원문 복사"
+                          onClick={() => copyMessage(it.result!, i)}
+                        >
+                          {copiedIdx === i ? '복사됨 ✓' : '복사'}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
