@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AttachmentPayload, ChatItem, SessionMeta, SessionSearchHit, TaskInfo } from '@shared/types'
+import type {
+  AttachmentPayload,
+  ChatItem,
+  SessionMeta,
+  SessionSearchHit,
+  TaskInfo,
+  TokenUsage
+} from '@shared/types'
 import Markdown from './Markdown'
+import { fmtTokens } from '../lib/format'
 
 interface PendingAttachment extends AttachmentPayload {
   previewUrl?: string
@@ -57,19 +65,26 @@ function splitLeadingQuote(text: string): { quote?: string; body: string } {
   return { quote: q.join('\n'), body: lines.slice(i).join('\n') }
 }
 
-/** 복사·시간 메타 행 — 사용자/에이전트 메시지 공용 */
+/** 복사·시간·토큰 메타 행 — 사용자/에이전트 메시지 공용 */
 function MsgMeta({
   at,
   copied,
-  onCopy
+  onCopy,
+  usage
 }: {
   at?: string
   copied: boolean
   onCopy: () => void
+  usage?: TokenUsage
 }): JSX.Element {
   return (
     <div className="msg-meta">
       {at && <span className="time">{formatTime(at)}</span>}
+      {usage && (
+        <span className="tokens" title="이 턴에서 사용한 토큰 (도구 호출 포함) — 입력 ↑ / 출력 ↓">
+          ↑{fmtTokens(usage.input)} ↓{fmtTokens(usage.output)}
+        </span>
+      )}
       <button className="copy" onClick={onCopy} title="마크다운 원문 복사">
         {copied ? '복사됨 ✓' : '복사'}
       </button>
@@ -264,6 +279,8 @@ export default function ChatView(): JSX.Element {
         } else {
           // 종료: 표시줄에서 제거하고 결과 카드(과정 로그 포함)를 대화에 추가
           setRunningTasks((prev) => prev.filter((x) => x.id !== t.id))
+          // 작업도 세션 누적 토큰에 반영되므로 메타를 다시 읽는다
+          void refreshSessions()
           setExpandedTaskId((prev) => (prev === t.id ? null : prev))
           setItems((prev) => [
             ...prev,
@@ -273,6 +290,18 @@ export default function ChatView(): JSX.Element {
       } else if (e.type === 'turn-end') {
         setBusy(false)
         if (e.error) setError(e.error)
+        // 이 턴의 토큰 사용량을 마지막 에이전트 메시지에 귀속 (저장본과 동일한 위치)
+        if (e.usage) {
+          const usage = e.usage
+          setItems((prev) => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].kind === 'assistant') {
+                return prev.map((it, j) => (j === i ? { ...it, usage } : it))
+              }
+            }
+            return prev
+          })
+        }
         // 아직 '실행 중'으로 남은 도구 카드를 '중단됨'으로 확정해 스피너가 무한히 도는 현상을 막는다
         if (e.unresolvedToolCallIds.length > 0) {
           const stuck = new Set(e.unresolvedToolCallIds)
@@ -477,6 +506,18 @@ export default function ChatView(): JSX.Element {
           if (e.dataTransfer.files.length > 0) void addFiles(e.dataTransfer.files)
         }}
       >
+        {(() => {
+          const meta = sessions.find((s) => s.id === activeId)
+          const input = meta?.inputTokens ?? 0
+          const output = meta?.outputTokens ?? 0
+          if (input + output === 0) return null
+          return (
+            <div className="session-usage" title="이 세션에서 누적 사용한 토큰 (대화 + 위임 작업 포함)">
+              세션 토큰 — 입력 {fmtTokens(input)} · 출력 {fmtTokens(output)} · 총{' '}
+              {fmtTokens(input + output)}
+            </div>
+          )
+        })()}
         <div className="messages" onMouseUp={onMessagesMouseUp} onScroll={() => setSelPop(null)}>
           {items.length === 0 && (
             <div className="empty">무엇을 도와드릴까요? 파일 정리, 스크립트 실행 등 데스크톱 작업을 요청해 보세요.</div>
@@ -509,7 +550,12 @@ export default function ChatView(): JSX.Element {
                   <div className="msg assistant">
                     <Markdown text={it.text} />
                   </div>
-                  <MsgMeta at={it.at} copied={copiedIdx === i} onCopy={() => copyMessage(it.text, i)} />
+                  <MsgMeta
+                    at={it.at}
+                    usage={it.usage}
+                    copied={copiedIdx === i}
+                    onCopy={() => copyMessage(it.text, i)}
+                  />
                 </div>
               )
             if (it.kind === 'memory')

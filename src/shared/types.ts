@@ -23,6 +23,30 @@ export interface SessionMeta {
   title: string
   createdAt: string
   updatedAt: string
+  /** 이 세션에서 누적 사용한 토큰 (대화 + 위임 작업 포함) */
+  inputTokens?: number
+  outputTokens?: number
+}
+
+/** 한 턴/호출에서 사용한 토큰 (입력/출력) */
+export interface TokenUsage {
+  input: number
+  output: number
+}
+
+/** LLM 호출 1건의 토큰 사용 기록 — usage.jsonl에 누적된다 */
+export interface UsageRecord {
+  at: string
+  /** 세션과 무관한 호출(네트워크 응답 등)은 비어 있다 */
+  sessionId?: string
+  /** 호출 주체: chat=메인 대화, task=워커 작업, memory=기억 추출, network=피어 응답·카드 생성 */
+  kind: 'chat' | 'task' | 'memory' | 'network'
+  provider: string
+  model: string
+  tier?: ModelTier
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
 }
 
 /** 대화 기록 검색 결과 한 건 */
@@ -52,7 +76,7 @@ export interface AttachmentMeta {
 
 export type ChatItem =
   | { kind: 'user'; text: string; at?: string; attachments?: AttachmentMeta[] }
-  | { kind: 'assistant'; text: string; at?: string }
+  | { kind: 'assistant'; text: string; at?: string; usage?: TokenUsage }
   | {
       kind: 'tool'
       toolCallId: string
@@ -109,7 +133,7 @@ export type ChatEvent =
   | { type: 'notice'; text: string }
   | { type: 'task-update'; task: TaskInfo }
   /** unresolvedToolCallIds: 턴 종료 시점에 아직 결과가 없는 도구 호출 (중단됨으로 확정) */
-  | { type: 'turn-end'; error?: string; unresolvedToolCallIds: string[] }
+  | { type: 'turn-end'; error?: string; unresolvedToolCallIds: string[]; usage?: TokenUsage }
 
 export interface ApprovalRequest {
   requestId: string

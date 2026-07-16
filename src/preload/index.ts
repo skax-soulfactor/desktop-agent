@@ -22,7 +22,8 @@ import type {
   SessionMeta,
   SessionSearchHit,
   TaskInfo,
-  TierAssignment
+  TierAssignment,
+  UsageRecord
 } from '@shared/types'
 import type { DesktopAgentApi, NetworkApproval, SessionDataDto } from '@shared/api'
 
@@ -69,6 +70,8 @@ const api: DesktopAgentApi = {
   deleteSession: (id: string): Promise<void> => ipcRenderer.invoke('sessions:delete', id),
   searchSessions: (query: string): Promise<SessionSearchHit[]> =>
     ipcRenderer.invoke('sessions:search', query),
+  listUsage: (from?: string, to?: string): Promise<UsageRecord[]> =>
+    ipcRenderer.invoke('usage:list', from, to),
 
   listProviders: (): Promise<{ providers: ProviderConfig[]; tiers: TierAssignment }> =>
     ipcRenderer.invoke('providers:list'),

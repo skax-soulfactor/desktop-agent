@@ -4,6 +4,7 @@ import type { AgentCard } from '@shared/types'
 import { getModelFor } from '../llm/providers'
 import { listMemories } from '../memory/store'
 import { getMyCard, saveMyCard, getNetworkConfig } from './store'
+import { recordUsage } from '../usage/store'
 
 /** '공유 제외' 태그가 붙은 기억은 카드 생성 입력에서 제외 */
 export const NO_SHARE_TAG = '공유제외'
@@ -50,11 +51,13 @@ export async function regenerateCard(): Promise<AgentCard> {
   const shareable = listMemories().filter((m) => !m.tags.includes(NO_SHARE_TAG))
   const index = shareable.map((m) => `- [${m.type}] ${m.title} (${m.tags.join(', ')})`).join('\n')
 
-  const { text } = await generateText({
-    model: getModelFor('light').model,
+  const { model, config } = getModelFor('light')
+  const { text, usage } = await generateText({
+    model,
     system: PROMPT,
     prompt: `## 지식베이스 인덱스 (공유 가능 항목)\n${index || '(비어 있음)'}`
   })
+  recordUsage({ kind: 'network', provider: config.label, model: config.model, tier: 'light' }, usage)
   const parsed = parseCard(text)
 
   const edited = existing?.ext.userEditedFields ?? []

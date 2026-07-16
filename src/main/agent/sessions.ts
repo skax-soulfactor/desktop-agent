@@ -42,6 +42,16 @@ export function deleteSession(id: string): void {
   deleteFile(`sessions/${id}.json`)
 }
 
+/** 세션 누적 토큰 카운터를 증가시킨다 (읽기-수정-쓰기, 동기 실행이라 원자적) */
+export function addSessionUsage(id: string, input: number, output: number): void {
+  if (input <= 0 && output <= 0) return
+  const fresh = getSession(id)
+  if (!fresh) return
+  fresh.meta.inputTokens = (fresh.meta.inputTokens ?? 0) + input
+  fresh.meta.outputTokens = (fresh.meta.outputTokens ?? 0) + output
+  saveSession(fresh)
+}
+
 /** 일치 지점 주변을 잘라 발췌를 만든다 */
 function makeSnippet(text: string, pos: number, matchLen: number): string {
   const CONTEXT = 40

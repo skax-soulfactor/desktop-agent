@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { MemoryOpSummary } from '@shared/types'
 import { getModelFor } from '../llm/providers'
 import { createMemory, listMemories, updateMemory } from './store'
+import { recordUsage } from '../usage/store'
 
 const opsSchema = z.object({
   ops: z.array(
@@ -64,7 +65,7 @@ export async function extractMemories(
   failures: FailureSignal[]
 ): Promise<MemoryOpSummary[]> {
   // 배경 작업이므로 경량 등급 사용 (미배정 시 일반으로 폴백)
-  const { model } = getModelFor('light')
+  const { model, config } = getModelFor('light')
   const existing = listMemories()
     .map((m) => `- id=${m.id} [${m.type}] ${m.title}`)
     .join('\n')
@@ -76,11 +77,15 @@ export async function extractMemories(
 
   // generateObject(구조화 출력)는 일부 모델이 미지원이라, 어떤 챗 모델에서도 동작하는
   // generateText + 관대한 JSON 파싱을 사용한다
-  const { text } = await generateText({
+  const { text, usage } = await generateText({
     model,
     system: EXTRACT_PROMPT,
     prompt: `## 기존 기억 목록\n${existing || '(없음)'}\n\n## 이번 턴 대화\n${turnTranscript.slice(-8000)}${failureText}`
   })
+  recordUsage(
+    { sessionId, kind: 'memory', provider: config.label, model: config.model, tier: 'light' },
+    usage
+  )
   const object = parseOps(text)
 
   const applied: MemoryOpSummary[] = []

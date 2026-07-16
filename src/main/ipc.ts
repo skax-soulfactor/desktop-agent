@@ -32,6 +32,7 @@ import {
 } from './network/manager'
 import { listSecrets, setSecret, deleteSecret } from './secrets/store'
 import { respondSecretRequest, pendingSecretRequests } from './secrets/request'
+import { listUsage } from './usage/store'
 import { listMcpServers, saveMcpServer, deleteMcpServer } from './mcp/store'
 import { testMcpServer, invalidateMcpConnection } from './mcp/manager'
 import type { McpServerConfig } from '@shared/types'
@@ -68,6 +69,9 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   ipcMain.handle('sessions:get', (_e, id: string) => getSession(id))
   ipcMain.handle('sessions:delete', (_e, id: string) => deleteSession(id))
   ipcMain.handle('sessions:search', (_e, query: string) => searchSessions(query))
+
+  // 토큰 사용량
+  ipcMain.handle('usage:list', (_e, from?: string, to?: string) => listUsage(from, to))
 
   // 프로바이더
   ipcMain.handle('providers:list', () => listProviders())

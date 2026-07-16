@@ -8,7 +8,8 @@ import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
-import { getSession, saveSession, appendToSession } from './sessions'
+import { getSession, saveSession, appendToSession, addSessionUsage } from './sessions'
+import { recordUsage } from '../usage/store'
 import { taskTools, listTasks } from './tasks'
 import { scheduleTools } from './scheduler'
 import { memoryTools } from '../memory/tools'
@@ -151,7 +152,7 @@ export async function runTurn(
 
   try {
     // 대화는 도구 호출 품질이 중요하므로 '일반' 등급 사용
-    const { model } = getModelFor('standard')
+    const { model, config } = getModelFor('standard')
     const memoryContext = buildMemoryContext(userText)
     const base = baseSystemPrompt(sessionId)
     const system = memoryContext ? `${base}\n\n${memoryContext}` : base
@@ -209,15 +210,22 @@ export async function runTurn(
     }
 
     // 히스토리 반영 — 디스크 최신 상태에 append (동시 기록 안전)
-    const response = await result.response
+    const [response, totalUsage] = await Promise.all([result.response, result.totalUsage])
+    // 이 턴 전체(도구 호출 스텝 포함)의 토큰 사용 — 마지막 에이전트 메시지에 귀속시킨다
+    const rec = recordUsage(
+      { sessionId, kind: 'chat', provider: config.label, model: config.model, tier: 'standard' },
+      totalUsage
+    )
+    const usage = { input: rec.inputTokens, output: rec.outputTokens }
     const newItems: ChatItem[] = [...toolItems.values()]
     if (assistantText) {
-      newItems.push({ kind: 'assistant', text: assistantText, at: new Date().toISOString() })
+      newItems.push({ kind: 'assistant', text: assistantText, at: new Date().toISOString(), usage })
       transcript.push(`에이전트: ${assistantText}`)
     }
     appendToSession(sessionId, newItems, response.messages)
+    addSessionUsage(sessionId, usage.input, usage.output)
     // 정상 종료 시에도 방어적으로 미해결 도구를 확정 (스텝 한도 등 대비)
-    send({ type: 'turn-end', unresolvedToolCallIds: resolveDanglingTools(toolItems) })
+    send({ type: 'turn-end', unresolvedToolCallIds: resolveDanglingTools(toolItems), usage })
 
     // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다. 실패는 삼키지 않고 화면에 알린다
     void extractMemories(sessionId, transcript.join('\n'), ctx.failures)

@@ -7,7 +7,8 @@ import { getModelFor } from '../llm/providers'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
-import { appendToSession } from './sessions'
+import { appendToSession, addSessionUsage } from './sessions'
+import { recordUsage } from '../usage/store'
 import { clarifyTool } from './clarify'
 import { integrationTools } from '../integrations/tools'
 import { mcpToolsFor } from '../mcp/manager'
@@ -104,7 +105,7 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
   let finalText = ''
 
   try {
-    const { model } = getModelFor(info.tier ?? 'standard')
+    const { model, config } = getModelFor(info.tier ?? 'standard')
     const memoryContext = buildMemoryContext(instruction)
     const system = memoryContext ? `${workerPrompt()}\n\n${memoryContext}` : workerPrompt()
 
@@ -191,6 +192,12 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
         throw part.error instanceof Error ? part.error : new Error(String(part.error))
       }
     }
+    const totalUsage = await result.totalUsage
+    const rec = recordUsage(
+      { sessionId: info.sessionId, kind: 'task', provider: config.label, model: config.model, tier: info.tier },
+      totalUsage
+    )
+    addSessionUsage(info.sessionId, rec.inputTokens, rec.outputTokens)
     finishTask(win, info, 'done', finalText.trim() || '작업이 완료되었습니다.')
   } catch (e) {
     // 중단·오류 시 아직 '실행 중'인 도구 카드를 확정해 로그가 모순 없이 남게 한다

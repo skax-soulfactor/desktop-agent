@@ -22,7 +22,8 @@ import type {
   SessionMeta,
   SessionSearchHit,
   TaskInfo,
-  TierAssignment
+  TierAssignment,
+  UsageRecord
 } from './types'
 
 export interface NetworkApproval {
@@ -62,6 +63,7 @@ export interface DesktopAgentApi {
   getSession(id: string): Promise<SessionDataDto | null>
   deleteSession(id: string): Promise<void>
   searchSessions(query: string): Promise<SessionSearchHit[]>
+  listUsage(from?: string, to?: string): Promise<UsageRecord[]>
 
   listProviders(): Promise<{ providers: ProviderConfig[]; tiers: TierAssignment }>
   saveProvider(config: ProviderConfig, apiKey?: string): Promise<void>
