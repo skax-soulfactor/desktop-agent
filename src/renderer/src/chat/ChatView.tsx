@@ -123,13 +123,21 @@ const TOOL_STATUS_LABEL: Record<string, string> = {
 }
 
 function ToolCard({ item }: { item: ChatItem & { kind: 'tool' } }): JSX.Element {
+  /* 출력은 접힌 칩이 기본 — 헤더 클릭으로 펼친다 */
+  const [open, setOpen] = useState(false)
+  const expandable = Boolean(item.output)
   return (
     <div className="toolcard">
-      <div className="head">
+      <div
+        className={`head ${expandable ? 'clickable' : ''}`}
+        onClick={() => expandable && setOpen((v) => !v)}
+        title={expandable ? '클릭해 출력 펼치기/접기' : undefined}
+      >
         <span className={`badge ${item.status}`}>{TOOL_STATUS_LABEL[item.status]}</span>
         <span>{item.summary}</span>
+        {expandable && <span className="chev">{open ? '▾' : '▸'}</span>}
       </div>
-      {item.output && <pre>{item.output}</pre>}
+      {open && item.output && <pre>{item.output}</pre>}
     </div>
   )
 }
@@ -166,6 +174,7 @@ export default function ChatView(): JSX.Element {
   const [openLogs, setOpenLogs] = useState<Set<string>>(new Set())
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [error, setError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeIdRef = useRef<string | null>(null)
@@ -325,6 +334,14 @@ export default function ChatView(): JSX.Element {
       }
     })
   }, [])
+
+  // 입력 내용에 맞춰 composer 높이 자동 조절
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = 'auto'
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+  }, [input])
 
   // 대화 기록 검색 (디바운스)
   useEffect(() => {
@@ -527,6 +544,7 @@ export default function ChatView(): JSX.Element {
           )
         })()}
         <div className="messages" onMouseUp={onMessagesMouseUp} onScroll={() => setSelPop(null)}>
+          <div className="msg-col">
           {items.length === 0 && (
             <div className="empty">무엇을 도와드릴까요? 파일 정리, 스크립트 실행 등 데스크톱 작업을 요청해 보세요.</div>
           )}
@@ -581,7 +599,7 @@ export default function ChatView(): JSX.Element {
             if (it.kind === 'task') {
               const logOpen = openLogs.has(it.taskId)
               return (
-                <div key={i} className="toolcard">
+                <div key={i} className="toolcard task">
                   <div className="head">
                     <span
                       className={`badge ${
@@ -636,6 +654,7 @@ export default function ChatView(): JSX.Element {
             return <ToolCard key={i} item={it} />
           })}
           <div ref={bottomRef} />
+          </div>
         </div>
         {selPop && (
           <button
@@ -709,50 +728,61 @@ export default function ChatView(): JSX.Element {
             ))}
           </div>
         )}
-        <div className="composer">
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              if (e.target.files) void addFiles(e.target.files)
-              e.target.value = ''
-            }}
-          />
-          <button onClick={() => fileInputRef.current?.click()} title="파일 첨부">
-            + 파일
-          </button>
-          <textarea
-            value={input}
-            placeholder="메시지 입력 (Enter 전송) — 이미지 붙여넣기, 파일 첨부·드롭 가능"
-            onChange={(e) => setInput(e.target.value)}
-            onPaste={(e) => {
-              const files = Array.from(e.clipboardData.items)
-                .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
-                .map((it) => it.getAsFile())
-                .filter((f): f is File => f !== null)
-              if (files.length > 0) {
-                e.preventDefault()
-                void addFiles(files)
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault()
-                send()
-              }
-            }}
-          />
-          {busy ? (
-            <button className="danger" onClick={() => activeId && void window.api.chatAbort(activeId)}>
-              중지
-            </button>
-          ) : (
-            <button className="primary" onClick={send}>
-              전송
-            </button>
-          )}
+        <div className="composer-area">
+          <div className="composer">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                if (e.target.files) void addFiles(e.target.files)
+                e.target.value = ''
+              }}
+            />
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={input}
+              placeholder="메시지 입력"
+              onChange={(e) => setInput(e.target.value)}
+              onPaste={(e) => {
+                const files = Array.from(e.clipboardData.items)
+                  .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+                  .map((it) => it.getAsFile())
+                  .filter((f): f is File => f !== null)
+                if (files.length > 0) {
+                  e.preventDefault()
+                  void addFiles(files)
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault()
+                  send()
+                }
+              }}
+            />
+            <div className="c-row">
+              <button className="iconbtn" onClick={() => fileInputRef.current?.click()} title="파일 첨부">
+                +
+              </button>
+              <span className="hint">Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기/드롭 가능</span>
+              {busy ? (
+                <button
+                  className="send stop"
+                  title="중지"
+                  onClick={() => activeId && void window.api.chatAbort(activeId)}
+                >
+                  ■
+                </button>
+              ) : (
+                <button className="send" title="전송" onClick={send}>
+                  ↑
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </>
