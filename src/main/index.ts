@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'path'
 import { registerIpc } from './ipc'
 import { startScheduler } from './agent/scheduler'
@@ -14,6 +14,16 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 560,
     title: 'Desktop Agent',
+    // 흰색 플래시 방지 + 타이틀바를 앱 배경과 통합 (드래그는 .topnav의 app-region이 담당)
+    backgroundColor: '#1f1e1d',
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const }
+      : process.platform === 'win32'
+        ? {
+            titleBarStyle: 'hidden' as const,
+            titleBarOverlay: { color: '#1f1e1d', symbolColor: '#eceae4', height: 40 }
+          }
+        : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -35,6 +45,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // 시스템 다크 외관 강제 — 네이티브 메뉴·다이얼로그도 앱과 톤을 맞춘다
+  nativeTheme.themeSource = 'dark'
   // Windows 알림(Notification)은 AppUserModelID가 있어야 표시된다
   if (process.platform === 'win32') app.setAppUserModelId('com.desktop-agent.app')
   registerIpc(() => {

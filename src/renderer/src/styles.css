@@ -16,7 +16,19 @@
   --radius-lg: 20px;
   font-family:
     'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', -apple-system, 'Segoe UI', sans-serif;
+  /* 네이티브 스크롤바·폼 컨트롤(날짜 선택 등)을 다크로 */
+  color-scheme: dark;
 }
+
+/* 스크롤바 — 앱 팔레트에 맞춘 얇은 다크 스타일 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #46443f; border-radius: 5px;
+  border: 2px solid transparent; background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: #57544e; }
+::-webkit-scrollbar-corner { background: transparent; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -45,6 +57,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--t
   padding: 10px 16px; background: var(--panel);
   -webkit-app-region: drag;
 }
+/* 숨긴 타이틀바의 네이티브 버튼 자리 확보 (맥: 좌측 신호등, 윈도우: 우측 컨트롤) */
+body.mac .topnav { padding-left: 84px; }
+body.win .topnav { padding-right: 150px; }
 .topnav .brand { font-weight: 650; font-size: 13.5px; margin-right: 18px; letter-spacing: -0.2px; }
 .topnav button {
   -webkit-app-region: no-drag; background: transparent; border: none;
