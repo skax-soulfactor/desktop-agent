@@ -1,6 +1,6 @@
 {
   "name": "desktop-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cross-platform desktop agent with permission-gated tools and a local knowledge base",
   "main": "./out/main/index.js",
   "private": true,
