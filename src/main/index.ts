@@ -1,5 +1,7 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'path'
+import { autoUpdater } from 'electron-updater'
+import icon from '../../resources/icon.png?asset'
 import { registerIpc } from './ipc'
 import { startScheduler } from './agent/scheduler'
 import { initNetwork } from './network/manager'
@@ -22,7 +24,9 @@ function createWindow(): void {
           // Windows/Linux: 창 조작 버튼만 오버레이로 남기고 나머지는 앱이 그린다
           titleBarStyle: 'hidden' as const,
           titleBarOverlay: { color: '#1f1e1d', symbolColor: '#eceae4', height: 40 },
-          autoHideMenuBar: true
+          autoHideMenuBar: true,
+          // macOS는 .icns가 Dock을 담당하고, Windows/Linux는 창 아이콘을 직접 지정한다
+          icon
         }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -56,6 +60,18 @@ app.whenReady().then(() => {
   createWindow()
   startScheduler(() => mainWindow)
   void initNetwork(() => mainWindow)
+
+  // 패키징된 빌드에서만 GitHub Releases를 확인해 자동 업데이트한다
+  // (다운로드 완료 시 알림 표시, 앱 종료 시 설치)
+  if (app.isPackaged) {
+    const checkForUpdates = (): void => {
+      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+        console.error('update check failed:', err)
+      })
+    }
+    checkForUpdates()
+    setInterval(checkForUpdates, 4 * 60 * 60 * 1000)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

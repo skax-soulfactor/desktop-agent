@@ -13,6 +13,12 @@ npm run build      # 프로덕션 번들 (out/)
 npx electron .     # 빌드된 번들 실행
 ```
 
+## 배포
+
+설치 파일 빌드는 electron-builder, 배포는 GitHub Releases, 자동 업데이트는 electron-updater를 쓴다.
+`npm version patch && git push --follow-tags` 두 줄이면 CI가 3개 OS 설치 파일을 빌드해 Release에
+올리고, 기존 사용자는 자동 업데이트를 받는다. 상세: [docs/RELEASE.md](docs/RELEASE.md)
+
 ## 첫 사용
 
 1. 상단 **설정** 탭에서 LLM 프로바이더 등록 (Anthropic / OpenAI / Google / Ollama / OpenAI 호환).
@@ -43,4 +49,4 @@ src/
   인터페이스가 `storage/`에 격리되어 있어 better-sqlite3로 교체 가능.
 - 셸: node-pty 대신 child_process.exec (비인터랙티브, 타임아웃 120초).
 - 기억 회상: 키워드 스코어링. 로컬 임베딩 벡터 검색은 M6에서 교체 예정.
-- 미구현: 스크린샷/클립보드/앱 실행 도구, MCP 클라이언트, 패키징(electron-builder), 자동 업데이트.
+- 미구현: 스크린샷/클립보드/앱 실행 도구.

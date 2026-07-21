@@ -1,0 +1,37 @@
+# v* 태그를 푸시하면 3개 OS에서 빌드해 GitHub Release에 산출물과
+# 자동 업데이트 메타데이터(latest*.yml)를 업로드한다.
+#
+#   npm version patch   # package.json 버전 올리고 v0.1.1 태그 생성
+#   git push --follow-tags
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # GITHUB_TOKEN으로 Release 생성/업로드
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Build and publish
+        run: npx electron-builder --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

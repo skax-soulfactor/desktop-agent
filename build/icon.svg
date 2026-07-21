@@ -1,0 +1,28 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 앱 테마의 터라코타 액센트(#d97757)를 중심으로 한 배경 그라디언트 -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e28a63"/>
+      <stop offset="1" stop-color="#bd5c3d"/>
+    </linearGradient>
+    <!-- 글리프에 살짝 온기를 주는 크림 그라디언트 (앱 텍스트 컬러 #eceae4 계열) -->
+    <linearGradient id="glyph" x1="0" y1="240" x2="0" y2="784" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#faf7f0"/>
+      <stop offset="1" stop-color="#ece7db"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 라운드 스퀘어 배경 -->
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#bg)"/>
+  <!-- 상단 하이라이트로 입체감 -->
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="#ffffff" opacity="0.06"
+        style="mix-blend-mode:overlay"/>
+
+  <!-- D: 왼쪽 세로바 + 반원 볼(bowl)로 이루어진 솔리드 글리프 -->
+  <path fill="url(#glyph)" d="M292 240 H480 A272 272 0 0 1 480 784 H292 Z"/>
+
+  <!-- A: D 안에 배경색으로 펀칭된 네거티브 스페이스 글리프 (카운터는 evenodd로 뚫림) -->
+  <path fill="url(#bg)" fill-rule="evenodd"
+        d="M503 328 L650 712 H570 L550 660 H456 L436 712 H356 Z
+           M503 537 L527 600 H479 Z"/>
+</svg>

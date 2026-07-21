@@ -1,0 +1,53 @@
+appId: com.desktop-agent.app
+productName: Desktop Agent
+
+directories:
+  buildResources: build # build/icon.png에서 icns/ico 자동 생성
+
+files:
+  - out/**
+  - resources/**
+  - '!src/*'
+  - '!scripts/*'
+  - '!build/*'
+  - '!electron.vite.config.ts'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!*.md'
+
+asarUnpack:
+  - resources/**
+
+mac:
+  category: public.app-category.productivity
+  # 자동 업데이트에는 zip 타깃이 필수 (dmg는 최초 설치용)
+  target:
+    - dmg
+    - zip
+  # 서명/공증 전까지는 identity를 비워 로컬 빌드가 실패하지 않게 한다
+  # 배포 시 Apple Developer ID 서명 + notarize 필요 (README 참고)
+
+win:
+  executableName: desktop-agent
+  target:
+    - nsis
+
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Utility
+  maintainer: skax-soulfactor
+
+# 자동 업데이트 피드: GitHub Releases
+publish:
+  provider: github
+  owner: skax-soulfactor
+  repo: desktop-agent
