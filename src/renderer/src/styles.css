@@ -57,9 +57,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--t
   padding: 10px 16px; background: var(--panel);
   -webkit-app-region: drag;
 }
-/* 숨긴 타이틀바의 네이티브 버튼 자리 확보 (맥: 좌측 신호등, 윈도우: 우측 컨트롤) */
+/* 숨긴 타이틀바의 네이티브 버튼 자리 확보 (맥: 좌측 신호등, 윈도우/리눅스: 우측 컨트롤) */
 body.mac .topnav { padding-left: 84px; }
 body.win .topnav { padding-right: 150px; }
+/* 리눅스는 GTK 테마별로 버튼 폭이 달라 오버레이 실측값(env)을 사용 */
+body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 16px); }
 .topnav .brand { font-weight: 650; font-size: 13.5px; margin-right: 18px; letter-spacing: -0.2px; }
 .topnav button {
   -webkit-app-region: no-drag; background: transparent; border: none;

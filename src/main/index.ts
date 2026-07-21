@@ -18,12 +18,12 @@ function createWindow(): void {
     backgroundColor: '#1f1e1d',
     ...(process.platform === 'darwin'
       ? { titleBarStyle: 'hiddenInset' as const }
-      : process.platform === 'win32'
-        ? {
-            titleBarStyle: 'hidden' as const,
-            titleBarOverlay: { color: '#1f1e1d', symbolColor: '#eceae4', height: 40 }
-          }
-        : {}),
+      : {
+          // Windows/Linux: 창 조작 버튼만 오버레이로 남기고 나머지는 앱이 그린다
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: { color: '#1f1e1d', symbolColor: '#eceae4', height: 40 },
+          autoHideMenuBar: true
+        }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
