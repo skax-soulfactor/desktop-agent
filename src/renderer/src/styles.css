@@ -71,6 +71,26 @@ body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw)
 .topnav button:hover { color: var(--text); background: var(--panel-2); }
 .topnav button.active { color: var(--text); background: var(--panel-2); }
 
+/* 알림 허용 안내 배너 (닫기 전까지 1회 표시) */
+.notif-hint {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; font-size: 12.5px; color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  border-bottom: 1px solid var(--border);
+}
+.notif-hint .ic { font-size: 14px; }
+.notif-hint .txt { flex: 1; color: var(--text-dim); }
+.notif-hint .open {
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+  border-radius: 8px; padding: 5px 12px; font-size: 12px; white-space: nowrap;
+}
+.notif-hint .open:hover { background: var(--accent-dim); }
+.notif-hint .close {
+  background: none; border: none; color: var(--text-dim); font-size: 16px;
+  line-height: 1; padding: 0 4px;
+}
+.notif-hint .close:hover { color: var(--text); }
+
 .layout { flex: 1; display: flex; min-height: 0; }
 
 .sidebar {

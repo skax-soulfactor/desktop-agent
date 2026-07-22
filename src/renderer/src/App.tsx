@@ -9,6 +9,7 @@ import UsageView from './usage/UsageView'
 import NetworkApprovalModal from './network/NetworkApprovalModal'
 import ClarifyModal from './clarify/ClarifyModal'
 import SecretModal from './secrets/SecretModal'
+import NotifyHint from './NotifyHint'
 
 type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'usage' | 'settings'
 
@@ -46,6 +47,7 @@ export default function App(): JSX.Element {
           설정
         </button>
       </div>
+      <NotifyHint />
       <div className="layout">
         {page === 'chat' && <ChatView />}
         {page === 'memory' && <MemoryView />}

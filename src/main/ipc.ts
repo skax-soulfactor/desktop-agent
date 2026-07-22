@@ -1,4 +1,4 @@
-import { ipcMain, type BrowserWindow } from 'electron'
+import { ipcMain, shell, type BrowserWindow } from 'electron'
 import type { ApprovalDecision, AttachmentPayload, ProviderConfig } from '@shared/types'
 import { runTurn, abortTurn, isTurnRunning } from './agent/loop'
 import { listTasks, cancelTask } from './agent/tasks'
@@ -136,6 +136,15 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     await invalidateMcpConnection(id)
   })
   ipcMain.handle('mcp:test', (_e, id: string) => testMcpServer(id))
+
+  // OS 알림 설정 화면 열기 (사용자가 알림을 켜도록 안내)
+  ipcMain.handle('app:openNotificationSettings', () => {
+    if (process.platform === 'darwin') {
+      void shell.openExternal('x-apple.systempreferences:com.apple.preference.notifications')
+    } else if (process.platform === 'win32') {
+      void shell.openExternal('ms-settings:notifications')
+    }
+  })
 
   // 앱 버전 / 업데이트
   ipcMain.handle('app:version', () => getAppVersion())

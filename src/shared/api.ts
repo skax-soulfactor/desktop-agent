@@ -111,6 +111,9 @@ export interface DesktopAgentApi {
   mcpDelete(id: string): Promise<void>
   mcpTest(id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }>
 
+  // OS 알림 설정 화면 열기
+  openNotificationSettings(): Promise<void>
+
   // 앱 버전 / 업데이트
   getAppVersion(): Promise<string>
   updateStatus(): Promise<UpdateStatus>

@@ -139,6 +139,9 @@ const api: DesktopAgentApi = {
   mcpTest: (id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }> =>
     ipcRenderer.invoke('mcp:test', id),
 
+  openNotificationSettings: (): Promise<void> =>
+    ipcRenderer.invoke('app:openNotificationSettings'),
+
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
   updateStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:status'),
   checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:check'),
