@@ -51,3 +51,6 @@ publish:
   provider: github
   owner: skax-soulfactor
   repo: desktop-agent
+  # 기본값(draft)은 게시 전까지 /releases/latest에 안 잡혀 자동 업데이트가 실패한다.
+  # release로 두면 빌드 즉시 정식 게시되고, 같은 태그의 다른 플랫폼 빌드는 기존 릴리스를 재사용한다.
+  releaseType: release
