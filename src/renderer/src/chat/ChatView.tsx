@@ -167,6 +167,10 @@ export default function ChatView(): JSX.Element {
   const [items, setItems] = useState<ChatItem[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  /** 응답 대기 중 실시간 진행 상태 — 첫 출력 전/도구 대기 구간을 채운다 */
+  const [progress, setProgress] = useState<{ label: string; kind: 'thinking' | 'tool' } | null>(null)
+  /** 진행 표시에 곁들일 경과 시간(초) */
+  const [elapsed, setElapsed] = useState(0)
   const [runningTasks, setRunningTasks] = useState<TaskInfo[]>([])
   /** 실시간 과정을 펼쳐 보는 진행 중 작업 id */
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
@@ -245,7 +249,10 @@ export default function ChatView(): JSX.Element {
       if (e.type === 'turn-start') {
         setBusy(true)
         setError(null)
+        setProgress({ label: '생각하고 있어요', kind: 'thinking' })
       } else if (e.type === 'text-delta') {
+        // 텍스트가 실시간으로 흐르는 동안에는 스트리밍 자체가 진행 표시이므로 인디케이터를 감춘다
+        setProgress(null)
         setItems((prev) => {
           const last = prev[prev.length - 1]
           if (last && last.kind === 'assistant') {
@@ -254,6 +261,7 @@ export default function ChatView(): JSX.Element {
           return [...prev, { kind: 'assistant', text: e.text, at: new Date().toISOString() }]
         })
       } else if (e.type === 'tool-call') {
+        setProgress({ label: e.summary, kind: 'tool' })
         setItems((prev) => [
           ...prev,
           {
@@ -265,6 +273,8 @@ export default function ChatView(): JSX.Element {
           }
         ])
       } else if (e.type === 'tool-result') {
+        // 도구가 끝나면 다음 단계를 준비하는 '생각 중'으로 되돌린다
+        setProgress({ label: '생각하고 있어요', kind: 'thinking' })
         setItems((prev) =>
           prev.map((it) =>
             it.kind === 'tool' && it.toolCallId === e.toolCallId
@@ -306,6 +316,7 @@ export default function ChatView(): JSX.Element {
         }
       } else if (e.type === 'turn-end') {
         setBusy(false)
+        setProgress(null)
         if (e.error) setError(e.error)
         // 이 턴의 토큰 사용량을 마지막 에이전트 메시지에 귀속 (저장본과 동일한 위치)
         if (e.usage) {
@@ -342,6 +353,17 @@ export default function ChatView(): JSX.Element {
     ta.style.height = 'auto'
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
   }, [input])
+
+  // 응답 대기 중 경과 시간 1초마다 갱신 (진행 표시에 곁들인다)
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0)
+      return
+    }
+    const start = Date.now()
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [busy])
 
   // 대화 기록 검색 (디바운스)
   useEffect(() => {
@@ -387,7 +409,9 @@ export default function ChatView(): JSX.Element {
       setQuote(null)
       setSelPop(null)
       // 버튼 상태를 이벤트가 아닌 실제 실행 여부로 동기화 (세션 전환·이벤트 누락 시 desync 방지)
-      setBusy(await window.api.chatIsRunning(id))
+      const running = await window.api.chatIsRunning(id)
+      setBusy(running)
+      setProgress(running ? { label: '생각하고 있어요', kind: 'thinking' } : null)
       setRunningTasks((await window.api.listTasks(id)).filter((t) => t.status === 'running'))
     }
   }
@@ -403,6 +427,7 @@ export default function ChatView(): JSX.Element {
     setActiveId(s.meta.id)
     setItems([])
     setBusy(false)
+    setProgress(null)
     setRunningTasks([])
   }
 
@@ -457,6 +482,8 @@ export default function ChatView(): JSX.Element {
     setPending([])
     setQuote(null)
     void window.api.chatSend(activeId, finalText, attachments)
+    // turn-start 이벤트를 기다리지 않고 즉시 진행 표시를 켜 반응 지연을 없앤다
+    setProgress({ label: '생각하고 있어요', kind: 'thinking' })
     setItems((prev) => [
       ...prev,
       {
@@ -653,6 +680,21 @@ export default function ChatView(): JSX.Element {
             }
             return <ToolCard key={i} item={it} />
           })}
+          {busy && progress && (
+            <div className="msg-wrap assistant">
+              <div className="progress-bubble">
+                <span className="dots" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <span className="plabel">
+                  {progress.kind === 'tool' ? `${progress.label} 실행 중` : progress.label}
+                </span>
+                {elapsed > 0 && <span className="pelapsed">{elapsed}초</span>}
+              </div>
+            </div>
+          )}
           <div ref={bottomRef} />
           </div>
         </div>
