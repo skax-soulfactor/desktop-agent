@@ -9,6 +9,7 @@ import type {
 } from '@shared/types'
 import Markdown from './Markdown'
 import { fmtTokens } from '../lib/format'
+import { copyText } from '../lib/clipboard'
 
 interface PendingAttachment extends AttachmentPayload {
   previewUrl?: string
@@ -33,22 +34,6 @@ function formatTime(at?: string): string {
   const hm = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
   const sameDay = d.toDateString() === new Date().toDateString()
   return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`
-}
-
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    // clipboard API가 막힌 환경(file:// 등) 대비 폴백
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.position = 'fixed'
-    ta.style.opacity = '0'
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    ta.remove()
-  }
 }
 
 /** 사용자 메시지 앞의 인용 블록("> ...")을 분리해 스타일링할 수 있게 한다 */

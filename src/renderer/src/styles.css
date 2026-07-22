@@ -239,6 +239,16 @@ body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw)
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 12px; margin: 8px 0 10px; overflow-x: auto;
 }
+/* 코드블럭 복사 버튼 — 우상단, hover 시 노출 */
+.md .codeblock { position: relative; }
+.md .codeblock .code-copy {
+  position: absolute; top: 8px; right: 8px; z-index: 1;
+  font-size: 11px; padding: 3px 9px; border-radius: 6px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
+  opacity: 0; transition: opacity 0.12s;
+}
+.md .codeblock:hover .code-copy { opacity: 1; }
+.md .codeblock .code-copy:hover { color: var(--text); background: var(--bg); }
 .md pre code { background: none; border: none; padding: 0; font-size: 12.5px; display: block; }
 .md blockquote { border-left: 3px solid var(--accent); margin: 8px 0 10px; padding: 2px 12px; color: var(--text-dim); }
 .md a { color: #8ab4d8; }
