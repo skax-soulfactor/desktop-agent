@@ -36,6 +36,7 @@ import { listUsage } from './usage/store'
 import { listMcpServers, saveMcpServer, deleteMcpServer } from './mcp/store'
 import { testMcpServer, invalidateMcpConnection } from './mcp/manager'
 import type { McpServerConfig } from '@shared/types'
+import { getAppVersion, getUpdateStatus, checkForUpdatesManual, quitAndInstall } from './update'
 
 export function registerIpc(getWin: () => BrowserWindow): void {
   // 채팅
@@ -135,4 +136,10 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     await invalidateMcpConnection(id)
   })
   ipcMain.handle('mcp:test', (_e, id: string) => testMcpServer(id))
+
+  // 앱 버전 / 업데이트
+  ipcMain.handle('app:version', () => getAppVersion())
+  ipcMain.handle('update:status', () => getUpdateStatus())
+  ipcMain.handle('update:check', () => checkForUpdatesManual())
+  ipcMain.handle('update:install', () => quitAndInstall())
 }

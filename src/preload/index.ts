@@ -23,6 +23,7 @@ import type {
   SessionSearchHit,
   TaskInfo,
   TierAssignment,
+  UpdateStatus,
   UsageRecord
 } from '@shared/types'
 import type { DesktopAgentApi, NetworkApproval, SessionDataDto } from '@shared/api'
@@ -136,7 +137,17 @@ const api: DesktopAgentApi = {
   mcpSave: (config: McpServerConfig): Promise<void> => ipcRenderer.invoke('mcp:save', config),
   mcpDelete: (id: string): Promise<void> => ipcRenderer.invoke('mcp:delete', id),
   mcpTest: (id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }> =>
-    ipcRenderer.invoke('mcp:test', id)
+    ipcRenderer.invoke('mcp:test', id),
+
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
+  updateStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:status'),
+  checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:check'),
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (cb: (s: UpdateStatus) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, s: UpdateStatus): void => cb(s)
+    ipcRenderer.on('update:status', handler)
+    return () => ipcRenderer.removeListener('update:status', handler)
+  }
 }
 
 contextBridge.exposeInMainWorld('api', api)

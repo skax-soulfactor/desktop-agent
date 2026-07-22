@@ -63,6 +63,7 @@ body.win .topnav { padding-right: 150px; }
 /* 리눅스는 GTK 테마별로 버튼 폭이 달라 오버레이 실측값(env)을 사용 */
 body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 16px); }
 .topnav .brand { font-weight: 650; font-size: 13.5px; margin-right: 18px; letter-spacing: -0.2px; }
+.topnav .brand .ver { font-weight: 400; font-size: 11px; color: var(--text-dim); margin-left: 6px; }
 .topnav button {
   -webkit-app-region: no-drag; background: transparent; border: none;
   color: var(--text-dim); padding: 6px 12px; border-radius: 8px; font-size: 13px;
@@ -411,6 +412,19 @@ body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw)
 .page h3 { font-size: 14px; color: var(--text-dim); margin-top: 8px; }
 
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+
+/* 앱 정보 및 업데이트 */
+.update-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.update-info { display: flex; flex-direction: column; gap: 4px; }
+.update-ver { font-size: 14px; }
+.update-msg { font-size: 12.5px; color: var(--text-dim); }
+.update-msg.err { color: var(--danger); }
+.update-actions button {
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+  border-radius: 8px; padding: 8px 14px; font-size: 13px; white-space: nowrap;
+}
+.update-actions button:hover { background: var(--accent-dim); }
+.update-actions button:disabled { opacity: 0.55; cursor: default; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grid-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: center; }
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import UpdateSection from './UpdateSection'
 import type {
   AuditRecord,
   McpServerConfig,
@@ -162,6 +163,8 @@ export default function SettingsView(): JSX.Element {
 
   return (
     <div className="page">
+      <UpdateSection />
+
       <h2>LLM 프로바이더</h2>
       <div className="card">
         {providers.length === 0 && <div className="empty">등록된 프로바이더가 없습니다. 아래에서 추가하세요.</div>}

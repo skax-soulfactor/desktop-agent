@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import ChatView from './chat/ChatView'
 import ApprovalModal from './approval/ApprovalModal'
 import SettingsView from './settings/SettingsView'
@@ -14,11 +14,19 @@ type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'usage' | 'settings'
 
 export default function App(): JSX.Element {
   const [page, setPage] = useState<Page>('chat')
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    void window.api.getAppVersion().then(setVersion)
+  }, [])
 
   return (
     <>
       <div className="topnav">
-        <span className="brand">Desktop Agent</span>
+        <span className="brand">
+          Desktop Agent
+          {version && <span className="ver">v{version}</span>}
+        </span>
         <button className={page === 'chat' ? 'active' : ''} onClick={() => setPage('chat')}>
           대화
         </button>

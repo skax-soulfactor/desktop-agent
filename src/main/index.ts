@@ -1,11 +1,11 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'path'
-import { autoUpdater } from 'electron-updater'
 import icon from '../../resources/icon.png?asset'
 import { registerIpc } from './ipc'
 import { startScheduler } from './agent/scheduler'
 import { initNetwork } from './network/manager'
 import { closeAllMcpConnections } from './mcp/manager'
+import { initUpdater } from './update'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -60,18 +60,9 @@ app.whenReady().then(() => {
   createWindow()
   startScheduler(() => mainWindow)
   void initNetwork(() => mainWindow)
-
-  // 패키징된 빌드에서만 GitHub Releases를 확인해 자동 업데이트한다
-  // (다운로드 완료 시 알림 표시, 앱 종료 시 설치)
-  if (app.isPackaged) {
-    const checkForUpdates = (): void => {
-      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-        console.error('update check failed:', err)
-      })
-    }
-    checkForUpdates()
-    setInterval(checkForUpdates, 4 * 60 * 60 * 1000)
-  }
+  // 자동 업데이트: 이벤트를 렌더러로 연결하고, 패키징된 빌드에서는 주기적으로 확인한다
+  // (수동 확인·설치는 설정 화면의 update:* IPC로 처리)
+  initUpdater(() => mainWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

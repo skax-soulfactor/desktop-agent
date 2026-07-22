@@ -23,6 +23,7 @@ import type {
   SessionSearchHit,
   TaskInfo,
   TierAssignment,
+  UpdateStatus,
   UsageRecord
 } from './types'
 
@@ -109,4 +110,11 @@ export interface DesktopAgentApi {
   mcpSave(config: McpServerConfig): Promise<void>
   mcpDelete(id: string): Promise<void>
   mcpTest(id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }>
+
+  // 앱 버전 / 업데이트
+  getAppVersion(): Promise<string>
+  updateStatus(): Promise<UpdateStatus>
+  checkForUpdates(): Promise<UpdateStatus>
+  installUpdate(): Promise<void>
+  onUpdateStatus(cb: (s: UpdateStatus) => void): () => void
 }

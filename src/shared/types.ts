@@ -139,6 +139,21 @@ export type ChatEvent =
   /** unresolvedToolCallIds: 턴 종료 시점에 아직 결과가 없는 도구 호출 (중단됨으로 확정) */
   | { type: 'turn-end'; error?: string; unresolvedToolCallIds: string[]; usage?: TokenUsage }
 
+/** 앱 업데이트 진행 상태 — 메인 프로세스가 렌더러로 실시간 전달 */
+export type UpdateStatus =
+  | { state: 'idle' }
+  | { state: 'checking' }
+  /** 새 버전 발견 — 곧 다운로드가 시작된다 */
+  | { state: 'available'; version: string }
+  /** 이미 최신 (version = 현재 버전) */
+  | { state: 'not-available'; version: string }
+  | { state: 'downloading'; percent: number }
+  /** 다운로드 완료 — 재시작 시 설치된다 */
+  | { state: 'downloaded'; version: string }
+  | { state: 'error'; message: string }
+  /** 개발 모드 등 업데이트를 확인할 수 없는 환경 */
+  | { state: 'unsupported'; message: string }
+
 export interface ApprovalRequest {
   requestId: string
   toolName: string
