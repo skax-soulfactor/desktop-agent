@@ -16,6 +16,12 @@ permissions:
 jobs:
   release:
     strategy:
+      # 순차 실행이 필수: 세 OS가 동시에 같은 태그의 Release를 만들려 하면
+      # 먼저 만든 잡만 성공하고 나머지는 422(already_exists)로 실패한다.
+      # 첫 잡이 Release를 만들고 나머지 잡은 같은 태그의 기존 Release에 자산만 올린다.
+      max-parallel: 1
+      # 한 OS가 실패해도 나머지 OS 산출물은 계속 업로드한다.
+      fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
