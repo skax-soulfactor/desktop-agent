@@ -461,7 +461,7 @@ export default function SettingsView(): JSX.Element {
         {audit.length > 0 && (
           <table>
             <thead>
-              <tr><th>시각</th><th>도구</th><th>내용</th><th>판정</th></tr>
+              <tr><th>시각</th><th>도구</th><th>내용</th><th>목적</th><th>판정</th></tr>
             </thead>
             <tbody>
               {audit.map((a, i) => (
@@ -469,6 +469,7 @@ export default function SettingsView(): JSX.Element {
                   <td className="dim">{new Date(a.at).toLocaleString()}</td>
                   <td>{a.toolName}</td>
                   <td className="dim">{a.summary}</td>
+                  <td className="dim">{a.purpose ?? '—'}</td>
                   <td className="dim">{a.decision}</td>
                 </tr>
               ))}

@@ -4,7 +4,14 @@ import { runTurn, abortTurn, isTurnRunning } from './agent/loop'
 import { listTasks, cancelTask } from './agent/tasks'
 import { respondClarify, pendingClarifications } from './agent/clarify'
 import { listSchedules, deleteSchedule, setScheduleEnabled } from './agent/scheduler'
-import { createSession, deleteSession, getSession, listSessions, searchSessions } from './agent/sessions'
+import {
+  createSession,
+  deleteSession,
+  getSession,
+  listSessions,
+  renameSession,
+  searchSessions
+} from './agent/sessions'
 import { respondToApproval } from './permissions/gateway'
 import { listRules, deleteRule } from './permissions/policies'
 import { listAudit } from './permissions/audit'
@@ -69,6 +76,7 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   ipcMain.handle('sessions:create', () => createSession())
   ipcMain.handle('sessions:get', (_e, id: string) => getSession(id))
   ipcMain.handle('sessions:delete', (_e, id: string) => deleteSession(id))
+  ipcMain.handle('sessions:rename', (_e, id: string, title: string) => renameSession(id, title))
   ipcMain.handle('sessions:search', (_e, query: string) => searchSessions(query))
 
   // 토큰 사용량

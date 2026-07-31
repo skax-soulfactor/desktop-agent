@@ -21,6 +21,8 @@ export interface ProviderConfig {
 export interface SessionMeta {
   id: string
   title: string
+  /** 사용자가 직접 이름을 지은 대화 — 자동 제목이 덮어쓰지 않는다 */
+  titlePinned?: boolean
   createdAt: string
   updatedAt: string
   /** 이 세션에서 누적 사용한 토큰 (대화 + 위임 작업 포함) */
@@ -162,6 +164,8 @@ export interface ApprovalRequest {
   input: string
   suggestedPattern: string
   lessons: string[]
+  /** 에이전트가 밝힌 요청 목적 — 이 실행이 왜 필요한지 (미기재일 수 있다) */
+  purpose?: string
 }
 
 export interface ApprovalDecision {
@@ -226,6 +230,8 @@ export interface AuditRecord {
   summary: string
   decision: 'allowed-by-rule' | 'allowed-by-user' | 'denied-by-rule' | 'denied-by-user' | 'blocked'
   result: 'ok' | 'error' | 'denied'
+  /** 에이전트가 밝힌 요청 목적 — 나중에 감사 기록에서 왜 실행했는지 추적할 수 있게 남긴다 */
+  purpose?: string
 }
 
 // ─────────────────────────── 에이전트 네트워크 (A2A) ───────────────────────────

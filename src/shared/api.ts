@@ -63,6 +63,7 @@ export interface DesktopAgentApi {
   createSession(): Promise<SessionDataDto>
   getSession(id: string): Promise<SessionDataDto | null>
   deleteSession(id: string): Promise<void>
+  renameSession(id: string, title: string): Promise<SessionMeta | null>
   searchSessions(query: string): Promise<SessionSearchHit[]>
   listUsage(from?: string, to?: string): Promise<UsageRecord[]>
 

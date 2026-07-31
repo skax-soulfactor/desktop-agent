@@ -37,7 +37,18 @@ export default function ApprovalModal(): JSX.Element | null {
           에이전트가 권한을 요청합니다
           <span className={`risk ${current.risk}`}>{RISK_LABEL[current.risk]}</span>
         </h3>
-        <div>{current.summary}</div>
+        <div className="approval-purpose">
+          <span className="label">왜 필요한가</span>
+          {current.purpose ? (
+            <p>{current.purpose}</p>
+          ) : (
+            <p className="missing">에이전트가 목적을 밝히지 않았습니다. 판단이 어려우면 거부하세요.</p>
+          )}
+        </div>
+        <div className="approval-what">
+          <span className="label">실행할 내용</span>
+          <p>{current.summary}</p>
+        </div>
         <pre>{current.input}</pre>
         {current.lessons.length > 0 && (
           <div className="lessons">

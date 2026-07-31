@@ -42,6 +42,24 @@ export function deleteSession(id: string): void {
   deleteFile(`sessions/${id}.json`)
 }
 
+const MAX_TITLE = 80
+
+/**
+ * 대화 제목을 사용자가 지정한 값으로 바꾼다.
+ * 이후 첫 발언으로 제목이 다시 덮이지 않도록 titlePinned를 세운다.
+ */
+export function renameSession(id: string, title: string): SessionMeta | null {
+  const trimmed = title.trim().replace(/\s+/g, ' ').slice(0, MAX_TITLE)
+  if (!trimmed) return null
+  const fresh = getSession(id)
+  if (!fresh) return null
+  fresh.meta.title = trimmed
+  fresh.meta.titlePinned = true
+  // 이름만 바꾼 것으로 목록 순서(최근 대화순)가 흐트러지지 않도록 updatedAt은 유지한다
+  writeJson(`sessions/${id}.json`, fresh)
+  return fresh.meta
+}
+
 /** 세션 누적 토큰 카운터를 증가시킨다 (읽기-수정-쓰기, 동기 실행이라 원자적) */
 export function addSessionUsage(id: string, input: number, output: number): void {
   if (input <= 0 && output <= 0) return

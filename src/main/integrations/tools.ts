@@ -7,6 +7,7 @@ import { requestSecretFromUser } from '../secrets/request'
 import { listMcpServers, saveMcpServer } from '../mcp/store'
 import { testMcpServer } from '../mcp/manager'
 import { checkPermission } from '../permissions/gateway'
+import { PURPOSE_FIELD } from '../tools'
 
 /**
  * 외부 서비스 연동을 에이전트가 스스로 진행할 수 있게 하는 도구 모음.
@@ -75,9 +76,10 @@ export function integrationTools(win: BrowserWindow, sessionId: string): ToolSet
         args: z.array(z.string()).optional().describe('stdio: 명령 인자'),
         env: z.record(z.string()).optional().describe('stdio: 환경 변수 ({{secret:이름}} 가능)'),
         url: z.string().optional().describe('http: 서버 URL'),
-        headers: z.record(z.string()).optional().describe('http: 요청 헤더 ({{secret:이름}} 가능)')
+        headers: z.record(z.string()).optional().describe('http: 요청 헤더 ({{secret:이름}} 가능)'),
+        purpose: PURPOSE_FIELD
       }),
-      execute: async (input) => {
+      execute: async ({ purpose, ...input }) => {
         // MCP 서버 연결은 로컬 명령 실행·외부 접속을 수반하므로 승인 필수
         const summary =
           input.transport === 'stdio'
@@ -90,7 +92,8 @@ export function integrationTools(win: BrowserWindow, sessionId: string): ToolSet
           summary,
           target: input.name,
           suggestedPattern: input.name,
-          inputJson: JSON.stringify(input, null, 2)
+          inputJson: JSON.stringify(input, null, 2),
+          purpose: purpose?.trim() || undefined
         })
         if (!gate.allowed) return { denied: true, reason: gate.reason }
 

@@ -69,6 +69,8 @@ const api: DesktopAgentApi = {
   createSession: (): Promise<SessionDataDto> => ipcRenderer.invoke('sessions:create'),
   getSession: (id: string): Promise<SessionDataDto | null> => ipcRenderer.invoke('sessions:get', id),
   deleteSession: (id: string): Promise<void> => ipcRenderer.invoke('sessions:delete', id),
+  renameSession: (id: string, title: string): Promise<SessionMeta | null> =>
+    ipcRenderer.invoke('sessions:rename', id, title),
   searchSessions: (query: string): Promise<SessionSearchHit[]> =>
     ipcRenderer.invoke('sessions:search', query),
   listUsage: (from?: string, to?: string): Promise<UsageRecord[]> =>

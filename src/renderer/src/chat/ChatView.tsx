@@ -148,6 +148,9 @@ function WorkLog({ items }: { items: ChatItem[] }): JSX.Element {
 
 export default function ChatView(): JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([])
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameText, setRenameText] = useState('')
+  const renameGuard = useRef(false)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
   const [input, setInput] = useState('')
@@ -416,6 +419,25 @@ export default function ChatView(): JSX.Element {
     setRunningTasks([])
   }
 
+  const startRename = (e: React.MouseEvent, s: SessionMeta): void => {
+    e.stopPropagation()
+    renameGuard.current = false
+    setRenamingId(s.id)
+    setRenameText(s.title)
+  }
+
+  /** Enter/blur는 저장, Escape는 취소. 입력이 사라지며 blur가 뒤따라도 한 번만 처리한다 */
+  const finishRename = async (commit: boolean): Promise<void> => {
+    if (renameGuard.current) return
+    renameGuard.current = true
+    const id = renamingId
+    const title = renameText.trim()
+    setRenamingId(null)
+    if (!commit || !id || !title) return
+    const updated = await window.api.renameSession(id, title)
+    if (updated) setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)))
+  }
+
   const removeSession = async (id: string): Promise<void> => {
     await window.api.deleteSession(id)
     const list = await window.api.listSessions()
@@ -515,24 +537,51 @@ export default function ChatView(): JSX.Element {
             ))}
           </div>
         ) : (
-          sessions.map((s) => (
-            <div
-              key={s.id}
-              className={`session ${s.id === activeId ? 'active' : ''}`}
-              onClick={() => void openSession(s.id)}
-            >
-              <span>{s.title}</span>
-              <button
-                className="del"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  void removeSession(s.id)
-                }}
+          sessions.map((s) =>
+            s.id === renamingId ? (
+              <div key={s.id} className="session renaming">
+                <input
+                  autoFocus
+                  value={renameText}
+                  maxLength={80}
+                  onChange={(e) => setRenameText(e.target.value)}
+                  onBlur={() => void finishRename(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void finishRename(true)
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault()
+                      void finishRename(false)
+                    }
+                  }}
+                />
+              </div>
+            ) : (
+              <div
+                key={s.id}
+                className={`session ${s.id === activeId ? 'active' : ''}`}
+                onClick={() => void openSession(s.id)}
+                onDoubleClick={(e) => startRename(e, s)}
+                title={`${s.title}\n(더블클릭하면 이름을 바꿉니다)`}
               >
-                ×
-              </button>
-            </div>
-          ))
+                <span>{s.title}</span>
+                <button className="rename" title="이름 변경" onClick={(e) => startRename(e, s)}>
+                  ✎
+                </button>
+                <button
+                  className="del"
+                  title="대화 삭제"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void removeSession(s.id)
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )
+          )
         )}
       </div>
       <div

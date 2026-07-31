@@ -110,8 +110,20 @@ body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw)
 }
 .sidebar .session:hover { background: var(--panel-2); color: var(--text); }
 .sidebar .session.active { background: var(--panel-2); color: var(--text); }
-.sidebar .session .del { visibility: hidden; color: var(--text-dim); border: none; background: none; padding: 0 4px; }
-.sidebar .session:hover .del { visibility: visible; }
+.sidebar .session > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sidebar .session .del,
+.sidebar .session .rename {
+  visibility: hidden; color: var(--text-dim); border: none; background: none; padding: 0 3px; line-height: 1;
+}
+.sidebar .session .rename { font-size: 12px; }
+.sidebar .session:hover .del, .sidebar .session:hover .rename { visibility: visible; }
+.sidebar .session .del:hover, .sidebar .session .rename:hover { color: var(--text); }
+/* 제목 인라인 편집 */
+.sidebar .session.renaming { padding: 4px 6px; cursor: default; }
+.sidebar .session.renaming input {
+  width: 100%; font-size: 13px; padding: 4px 6px; border-radius: 6px;
+  background: var(--bg); border: 1px solid var(--accent); color: var(--text);
+}
 
 /* 대화 기록 검색 */
 .sidebar .search-box { position: relative; display: flex; }
@@ -433,6 +445,17 @@ body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw)
 .dialog .risk.execute { color: var(--danger); border: 1px solid var(--danger); }
 .dialog pre { background: var(--bg); padding: 10px; border-radius: 8px; font-size: 12px; max-height: 180px; overflow: auto; }
 .dialog .lessons { font-size: 12px; color: var(--warn); background: var(--panel-2); padding: 8px 10px; border-radius: 8px; }
+/* 승인 다이얼로그: 목적을 먼저, 실행 내용을 그 다음에 */
+.dialog .approval-purpose, .dialog .approval-what { display: flex; flex-direction: column; gap: 4px; }
+.dialog .approval-purpose .label, .dialog .approval-what .label {
+  font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.dialog .approval-purpose p {
+  font-size: 13.5px; line-height: 1.5; background: var(--panel-2);
+  padding: 9px 11px; border-radius: 8px; border-left: 3px solid var(--accent);
+}
+.dialog .approval-purpose p.missing { color: var(--warn); border-left-color: var(--warn); }
+.dialog .approval-what p { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
 .dialog .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .dialog .pattern-row { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .dialog .pattern-row input { flex: 1; }

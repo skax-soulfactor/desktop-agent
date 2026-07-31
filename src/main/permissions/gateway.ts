@@ -59,6 +59,8 @@ export interface GateInput {
   target: string
   suggestedPattern: string
   inputJson: string
+  /** 에이전트가 밝힌 요청 목적 — 승인 다이얼로그와 감사 기록에 함께 남는다 */
+  purpose?: string
 }
 
 export interface GateResult {
@@ -76,7 +78,8 @@ export async function checkPermission(win: BrowserWindow, g: GateInput): Promise
       toolName: g.toolName,
       summary: g.summary,
       decision: 'blocked',
-      result: 'denied'
+      result: 'denied',
+      purpose: g.purpose
     })
     return { allowed: false, reason: '파괴적 명령으로 분류되어 차단되었습니다.' }
   }
@@ -90,7 +93,8 @@ export async function checkPermission(win: BrowserWindow, g: GateInput): Promise
       toolName: g.toolName,
       summary: g.summary,
       decision: 'denied-by-rule',
-      result: 'denied'
+      result: 'denied',
+      purpose: g.purpose
     })
     return { allowed: false, reason: '차단 규칙에 의해 거부되었습니다.' }
   }
@@ -101,7 +105,8 @@ export async function checkPermission(win: BrowserWindow, g: GateInput): Promise
       toolName: g.toolName,
       summary: g.summary,
       decision: 'allowed-by-rule',
-      result: 'ok'
+      result: 'ok',
+      purpose: g.purpose
     })
     return { allowed: true }
   }
@@ -115,7 +120,8 @@ export async function checkPermission(win: BrowserWindow, g: GateInput): Promise
     risk: g.risk,
     input: g.inputJson,
     suggestedPattern: g.suggestedPattern,
-    lessons
+    lessons,
+    purpose: g.purpose
   })
 
   if (decision.action === 'allow' && (decision.scope === 'session' || decision.scope === 'always')) {
@@ -133,7 +139,8 @@ export async function checkPermission(win: BrowserWindow, g: GateInput): Promise
     toolName: g.toolName,
     summary: g.summary,
     decision: decision.action === 'allow' ? 'allowed-by-user' : 'denied-by-user',
-    result: decision.action === 'allow' ? 'ok' : 'denied'
+    result: decision.action === 'allow' ? 'ok' : 'denied',
+    purpose: g.purpose
   })
 
   return decision.action === 'allow'
