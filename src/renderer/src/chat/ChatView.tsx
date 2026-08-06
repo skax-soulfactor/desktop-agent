@@ -8,8 +8,10 @@ import type {
   TokenUsage
 } from '@shared/types'
 import Markdown from './Markdown'
+import SidebarResizer from './SidebarResizer'
 import { fmtTokens } from '../lib/format'
 import { copyText } from '../lib/clipboard'
+import { useSidebarPrefs } from '../lib/sidebarPrefs'
 
 interface PendingAttachment extends AttachmentPayload {
   previewUrl?: string
@@ -154,6 +156,7 @@ interface ChatViewProps {
 }
 
 export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = {}): JSX.Element {
+  const { prefs, setWidth, commitWidth, resetWidth, toggleHidden, toggleSide } = useSidebarPrefs()
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
@@ -240,6 +243,19 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
     })()
     // 마운트 이후 같은 대화를 다시 요청받는 경우까지 nonce로 반응한다
   }, [jumpSession?.nonce])
+
+  // ⌘/Ctrl+B — 사이드바 접기/펼치기 (편집 중에도 동작해야 하므로 입력 필드를 가리지 않는다)
+  // e.key는 입력기·자판 배열에 따라 'b'가 아닌 값으로 들어올 수 있어 물리 키(e.code)를 우선 본다
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const isB = e.code === 'KeyB' || e.key.toLowerCase() === 'b'
+      if (!isB || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      e.preventDefault()
+      toggleHidden()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [toggleHidden])
 
   useEffect(() => {
     return window.api.onChatEvent((e) => {
@@ -513,10 +529,41 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
     setBusy(true)
   }
 
+  const sideLabel = prefs.side === 'left' ? '오른쪽' : '왼쪽'
+
   return (
-    <>
-      <div className="sidebar">
-        <button onClick={() => void newSession()}>+ 새 대화</button>
+    <div className={`chat-layout ${prefs.side === 'right' ? 'sidebar-right' : ''}`}>
+      {prefs.hidden ? (
+        <button
+          className="sidebar-reveal"
+          title="사이드바 표시 (⌘/Ctrl+B)"
+          aria-label="사이드바 표시"
+          onClick={toggleHidden}
+        >
+          {prefs.side === 'left' ? '›' : '‹'}
+        </button>
+      ) : (
+        <>
+          <div className="sidebar" style={{ width: prefs.width }}>
+            <div className="sidebar-head">
+              <button
+                className="sb-btn"
+                title={`사이드바를 ${sideLabel}으로 옮기기`}
+                aria-label={`사이드바를 ${sideLabel}으로 옮기기`}
+                onClick={toggleSide}
+              >
+                ⇄
+              </button>
+              <button
+                className="sb-btn"
+                title="사이드바 숨기기 (⌘/Ctrl+B)"
+                aria-label="사이드바 숨기기"
+                onClick={toggleHidden}
+              >
+                {prefs.side === 'left' ? '‹' : '›'}
+              </button>
+            </div>
+            <button onClick={() => void newSession()}>+ 새 대화</button>
         <div className="search-box">
           <input
             value={search}
@@ -593,7 +640,16 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
             )
           )
         )}
-      </div>
+          </div>
+          <SidebarResizer
+            width={prefs.width}
+            side={prefs.side}
+            onResize={setWidth}
+            onCommit={commitWidth}
+            onReset={resetWidth}
+          />
+        </>
+      )}
       <div
         className="main"
         onDragOver={(e) => e.preventDefault()}
@@ -883,6 +939,6 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
           </div>
         </div>
       </div>
-    </>
+    </div>
   )
 }
