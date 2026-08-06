@@ -1,4 +1,5 @@
-import { listMemories, searchMemories } from './store'
+import type { MemoryEntry } from '@shared/types'
+import { listMemories, pinnedMemories, queryMemories, recallMemories } from './store'
 
 const TYPE_LABEL: Record<string, string> = {
   user: '사용자',
@@ -9,27 +10,44 @@ const TYPE_LABEL: Record<string, string> = {
 
 const NO_SHARE_TAG = '공유제외'
 
+export interface RecallOptions {
+  /** 원격(피어) 응답용 — '공유제외' 태그 기억을 배제한다 */
+  shareableOnly?: boolean
+  /**
+   * true면 회상 이력(lastRecalledAt, recallCount)을 남기지 않는다.
+   * 지식베이스의 "주입 미리보기"처럼 실제 주입이 아닌 경로에서 사용한다.
+   */
+  dryRun?: boolean
+}
+
 /**
- * 회상: (1) 전체 기억의 한 줄 인덱스는 항상 포함, (2) 현재 메시지와 관련된 기억 전문 top-k 주입.
+ * 회상: (1) 전체 기억의 한 줄 인덱스는 항상 포함, (2) 고정 기억 전문, (3) 현재 메시지와 관련된 기억 전문 top-k 주입.
  * 토큰 예산을 넘지 않도록 본문 길이를 제한한다.
- * shareableOnly=true면 원격(피어) 응답용으로 '공유제외' 태그 기억을 배제한다.
  */
-export function buildMemoryContext(userMessage: string, shareableOnly = false): string {
-  const all = listMemories().filter((m) => !shareableOnly || !m.tags.includes(NO_SHARE_TAG))
+export function buildMemoryContext(userMessage: string, opts: RecallOptions = {}): string {
+  const { shareableOnly = false, dryRun = false } = opts
+  const shareable = (m: MemoryEntry): boolean => !shareableOnly || !m.tags.includes(NO_SHARE_TAG)
+
+  const all = listMemories().filter(shareable)
   if (all.length === 0) return ''
 
   const index = all.map((m) => `- [${TYPE_LABEL[m.type]}] ${m.title}`).join('\n')
 
-  const relevant = searchMemories(userMessage, 5).filter(
-    (m) => !shareableOnly || !m.tags.includes(NO_SHARE_TAG)
+  const pinned = pinnedMemories().filter(shareable)
+  const search = dryRun ? queryMemories : recallMemories
+  const relevant = search(userMessage, 5).filter(
+    (m) => shareable(m) && !pinned.some((p) => p.id === m.id)
   )
-  const bodies = relevant
-    .map((m) => `### [${TYPE_LABEL[m.type]}] ${m.title}\n${m.content.slice(0, 1500)}`)
-    .join('\n\n')
+
+  const body = (m: MemoryEntry): string =>
+    `### [${TYPE_LABEL[m.type]}] ${m.title}\n${m.content.slice(0, 1500)}`
 
   let ctx = `## 지식베이스 (이전 협업에서 기록된 기억)\n\n### 전체 기억 인덱스\n${index}`
-  if (bodies) {
-    ctx += `\n\n### 현재 요청과 관련된 기억\n\n${bodies}`
+  if (pinned.length > 0) {
+    ctx += `\n\n### 항상 지켜야 할 고정 기억\n\n${pinned.map(body).join('\n\n')}`
+  }
+  if (relevant.length > 0) {
+    ctx += `\n\n### 현재 요청과 관련된 기억\n\n${relevant.map(body).join('\n\n')}`
   }
   ctx +=
     '\n\n기억을 활용해 사용자의 의도를 파악하고, 관련된 진행 중 작업이나 요구사항이 있으면 선제적으로 제안하라. ' +

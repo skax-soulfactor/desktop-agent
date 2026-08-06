@@ -128,6 +128,8 @@ export interface MemoryOpSummary {
   op: 'create' | 'update' | 'archive'
   type: MemoryType
   title: string
+  /** 대상 기억 id — 채팅 카드에서 지식베이스로 바로 이동하기 위한 값 */
+  id?: string
 }
 
 export type ChatEvent =
@@ -195,9 +197,48 @@ export interface MemoryEntry {
   sourceSessionId: string
   createdAt: string
   updatedAt: string
-  lastRecalledAt: string
+  /** 마지막으로 컨텍스트에 주입된 시각. 저장만 되고 아직 쓰인 적 없으면 undefined */
+  lastRecalledAt?: string
   status: 'active' | 'archived'
+  /** 실제 회상 횟수. 0 = 저장 후 한 번도 쓰이지 않음 (노후 판정의 핵심 신호) */
+  recallCount?: number
+  /** 고정 기억 — 검색 순위와 무관하게 본문이 항상 컨텍스트에 주입된다 */
+  pinned?: boolean
+  /** 'agent' = 자동 추출/도구 저장, 'user' = 사용자가 직접 작성 */
+  origin?: 'agent' | 'user'
+  /** 사용자가 점검 대기함에서 확인 완료한 시각 */
+  reviewedAt?: string
 }
+
+/** 지식베이스 요약 — 상단 스트립에 표시 */
+export interface MemoryStats {
+  total: number
+  archived: number
+  pinned: number
+  byType: Record<MemoryType, number>
+  /** 매 턴 프롬프트에 주입되는 지식베이스 블록의 추정 토큰 수 */
+  injectedTokens: number
+  /** 주입 블록 문자 수 (추정 근거) */
+  injectedChars: number
+}
+
+export type MemoryReviewKind = 'duplicate' | 'stale' | 'malformed' | 'orphan'
+
+/** 점검 대기함 항목 — 룰 기반으로 계산되며 LLM 호출이 없다 */
+export interface MemoryReviewItem {
+  kind: MemoryReviewKind
+  /** 점검 대상 기억 */
+  id: string
+  title: string
+  type: MemoryType
+  /** 왜 걸렸는지 사람이 읽는 설명 */
+  reason: string
+  /** kind='duplicate'일 때 짝이 되는 기억 */
+  pairId?: string
+  pairTitle?: string
+}
+
+export type MemoryBulkAction = 'archive' | 'activate' | 'delete' | 'addTag' | 'removeTag'
 
 export type ScheduleKind = 'once' | 'interval' | 'daily'
 

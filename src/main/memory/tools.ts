@@ -24,14 +24,23 @@ export function memoryTools(win: BrowserWindow, sessionId: string): ToolSet {
       execute: async ({ type, title, content, tags }) => {
         const existing = listMemories().find((m) => m.title === title)
         let op: MemoryOpSummary['op']
+        let id: string
         if (existing) {
           updateMemory(existing.id, { type, content, ...(tags ? { tags } : {}) })
           op = 'update'
+          id = existing.id
         } else {
-          createMemory({ type, title, content, tags: tags ?? [], sourceSessionId: sessionId })
+          const created = createMemory({
+            type,
+            title,
+            content,
+            tags: tags ?? [],
+            sourceSessionId: sessionId
+          })
           op = 'create'
+          id = created.id
         }
-        const ops: MemoryOpSummary[] = [{ op, type, title }]
+        const ops: MemoryOpSummary[] = [{ op, type, title, id }]
         appendToSession(sessionId, [{ kind: 'memory', ops }], [])
         if (!win.isDestroyed()) {
           win.webContents.send('chat:event', { sessionId, type: 'memory-saved', ops })

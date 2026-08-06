@@ -1,4 +1,5 @@
-import { ipcMain, shell, type BrowserWindow } from 'electron'
+import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
+import { readFileSync, writeFileSync } from 'fs'
 import type { ApprovalDecision, AttachmentPayload, ProviderConfig } from '@shared/types'
 import { runTurn, abortTurn, isTurnRunning } from './agent/loop'
 import { listTasks, cancelTask } from './agent/tasks'
@@ -17,7 +18,23 @@ import { listRules, deleteRule } from './permissions/policies'
 import { listAudit } from './permissions/audit'
 import { listProviders, saveProvider, deleteProvider, setTier } from './llm/providers'
 import type { ModelTier } from '@shared/types'
-import { listMemories, deleteMemory, updateMemory } from './memory/store'
+import {
+  listMemories,
+  createMemory,
+  deleteMemory,
+  updateMemory,
+  bulkUpdate,
+  mergeMemories,
+  markReviewed,
+  needsReview,
+  memoryStats,
+  estimateTokens,
+  exportMemories,
+  exportMarkdown,
+  importMemories
+} from './memory/store'
+import { buildMemoryContext } from './memory/recall'
+import type { MemoryBulkAction, MemoryEntry } from '@shared/types'
 import type { AgentCard, NetworkConfig, PeerPolicy } from '@shared/types'
 import {
   getNetworkConfig,
@@ -99,10 +116,60 @@ export function registerIpc(getWin: () => BrowserWindow): void {
 
   // 지식베이스
   ipcMain.handle('memory:list', () => listMemories(true))
+  ipcMain.handle(
+    'memory:create',
+    (_e, data: Pick<MemoryEntry, 'type' | 'title' | 'content' | 'tags'>) =>
+      createMemory({ ...data, sourceSessionId: '', origin: 'user' })
+  )
   ipcMain.handle('memory:delete', (_e, id: string) => deleteMemory(id))
   ipcMain.handle('memory:update', (_e, id: string, patch: Record<string, unknown>) =>
     updateMemory(id, patch)
   )
+  ipcMain.handle('memory:bulk', (_e, ids: string[], action: MemoryBulkAction, tag?: string) =>
+    bulkUpdate(ids, action, tag)
+  )
+  ipcMain.handle('memory:merge', (_e, keepId: string, dropIds: string[]) =>
+    mergeMemories(keepId, dropIds)
+  )
+  ipcMain.handle('memory:review', () => needsReview())
+  ipcMain.handle('memory:markReviewed', (_e, id: string) => markReviewed(id))
+  // 빈 질의로 만든 블록 = 검색과 무관하게 매 턴 항상 들어가는 고정 비용
+  ipcMain.handle('memory:stats', () => memoryStats(buildMemoryContext('', { dryRun: true })))
+  ipcMain.handle('memory:preview', (_e, query: string) => {
+    const text = buildMemoryContext(query, { dryRun: true })
+    return { text, tokens: estimateTokens(text) }
+  })
+  ipcMain.handle('memory:export', async (_e, format: 'json' | 'md') => {
+    const stamp = new Date().toISOString().slice(0, 10)
+    const { canceled, filePath } = await dialog.showSaveDialog(getWin(), {
+      title: '지식베이스 내보내기',
+      defaultPath: `knowledge-base-${stamp}.${format}`,
+      filters:
+        format === 'json'
+          ? [{ name: 'JSON', extensions: ['json'] }]
+          : [{ name: 'Markdown', extensions: ['md'] }]
+    })
+    if (canceled || !filePath) return null
+    const body =
+      format === 'json' ? JSON.stringify(exportMemories(), null, 2) : exportMarkdown()
+    writeFileSync(filePath, body, 'utf-8')
+    return filePath
+  })
+  ipcMain.handle('memory:import', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(getWin(), {
+      title: '지식베이스 가져오기',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (canceled || filePaths.length === 0) return null
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(filePaths[0], 'utf-8'))
+      if (!Array.isArray(parsed)) return { added: 0, skipped: 0, error: 'JSON 배열이 아닙니다.' }
+      return importMemories(parsed as MemoryEntry[])
+    } catch (e) {
+      return { added: 0, skipped: 0, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
 
   // 에이전트 네트워크
   ipcMain.handle('net:config', () => getNetworkConfig())

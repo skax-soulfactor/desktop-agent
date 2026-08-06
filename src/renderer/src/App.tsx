@@ -13,13 +13,33 @@ import NotifyHint from './NotifyHint'
 
 type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'usage' | 'settings'
 
+/** 탭 간 이동 요청. nonce는 같은 대상을 연속으로 요청해도 반응하게 하는 값 */
+interface Jump {
+  id: string
+  nonce: number
+}
+
 export default function App(): JSX.Element {
   const [page, setPage] = useState<Page>('chat')
   const [version, setVersion] = useState('')
+  /** 지식베이스 → 대화: 기억의 출처 대화 열기 */
+  const [jumpSession, setJumpSession] = useState<Jump | null>(null)
+  /** 대화 → 지식베이스: 방금 저장된 기억 열기 */
+  const [jumpMemory, setJumpMemory] = useState<Jump | null>(null)
 
   useEffect(() => {
     void window.api.getAppVersion().then(setVersion)
   }, [])
+
+  const openSessionFromMemory = (sessionId: string): void => {
+    setJumpSession({ id: sessionId, nonce: Date.now() })
+    setPage('chat')
+  }
+
+  const openMemoryFromChat = (memoryId: string): void => {
+    setJumpMemory({ id: memoryId, nonce: Date.now() })
+    setPage('memory')
+  }
 
   return (
     <>
@@ -49,8 +69,12 @@ export default function App(): JSX.Element {
       </div>
       <NotifyHint />
       <div className="layout">
-        {page === 'chat' && <ChatView />}
-        {page === 'memory' && <MemoryView />}
+        {page === 'chat' && (
+          <ChatView jumpSession={jumpSession} onOpenMemory={openMemoryFromChat} />
+        )}
+        {page === 'memory' && (
+          <MemoryView focusId={jumpMemory?.id ?? null} onOpenSession={openSessionFromMemory} />
+        )}
         {page === 'schedules' && <SchedulesView />}
         {page === 'network' && <NetworkView />}
         {page === 'usage' && <UsageView />}

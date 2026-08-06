@@ -9,7 +9,10 @@ import type {
   ClarifyRequest,
   InboundRecord,
   McpServerConfig,
+  MemoryBulkAction,
   MemoryEntry,
+  MemoryReviewItem,
+  MemoryStats,
   ModelTier,
   NetworkConfig,
   Peer,
@@ -76,9 +79,22 @@ export interface DesktopAgentApi {
   deleteRule(id: string): Promise<void>
   listAudit(): Promise<AuditRecord[]>
 
+  // 지식베이스
   listMemories(): Promise<MemoryEntry[]>
+  createMemory(
+    data: Pick<MemoryEntry, 'type' | 'title' | 'content' | 'tags'>
+  ): Promise<MemoryEntry>
   deleteMemory(id: string): Promise<void>
   updateMemory(id: string, patch: Partial<MemoryEntry>): Promise<MemoryEntry | null>
+  bulkMemory(ids: string[], action: MemoryBulkAction, tag?: string): Promise<number>
+  mergeMemories(keepId: string, dropIds: string[]): Promise<MemoryEntry | null>
+  memoryReview(): Promise<MemoryReviewItem[]>
+  markMemoryReviewed(id: string): Promise<MemoryEntry | null>
+  memoryStats(): Promise<MemoryStats>
+  /** 지금 이 질문을 보내면 프롬프트에 실제로 들어갈 지식베이스 블록 (회상 이력을 남기지 않음) */
+  memoryPreview(query: string): Promise<{ text: string; tokens: number }>
+  exportMemories(format: 'json' | 'md'): Promise<string | null>
+  importMemories(): Promise<{ added: number; skipped: number; error?: string } | null>
 
   // 에이전트 네트워크
   netConfig(): Promise<NetworkConfig>

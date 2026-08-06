@@ -146,7 +146,14 @@ function WorkLog({ items }: { items: ChatItem[] }): JSX.Element {
   )
 }
 
-export default function ChatView(): JSX.Element {
+interface ChatViewProps {
+  /** 지식베이스에서 "출처 대화 열기"로 넘어온 대화 */
+  jumpSession?: { id: string; nonce: number } | null
+  /** 기억 카드에서 지식베이스로 이동 */
+  onOpenMemory?: (memoryId: string) => void
+}
+
+export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = {}): JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
@@ -220,8 +227,10 @@ export default function ChatView(): JSX.Element {
     void (async () => {
       const list = await window.api.listSessions()
       setSessions(list)
-      if (list.length > 0) {
-        await openSession(list[0].id)
+      // 지식베이스에서 지정해 들어온 대화가 있으면 그것을, 없으면 최근 대화를 연다
+      const target = jumpSession && list.some((s) => s.id === jumpSession.id) ? jumpSession.id : list[0]?.id
+      if (target) {
+        await openSession(target)
       } else {
         const s = await window.api.createSession()
         setSessions([s.meta])
@@ -229,7 +238,8 @@ export default function ChatView(): JSX.Element {
         setItems([])
       }
     })()
-  }, [])
+    // 마운트 이후 같은 대화를 다시 요청받는 경우까지 nonce로 반응한다
+  }, [jumpSession?.nonce])
 
   useEffect(() => {
     return window.api.onChatEvent((e) => {
@@ -648,7 +658,19 @@ export default function ChatView(): JSX.Element {
             if (it.kind === 'memory')
               return (
                 <div key={i} className="memcard">
-                  기억함: {it.ops.map((o) => `${o.title}`).join(' · ')}
+                  기억함:{' '}
+                  {it.ops.map((o, k) => (
+                    <span key={k}>
+                      {k > 0 && ' · '}
+                      {o.id && onOpenMemory ? (
+                        <button className="link" onClick={() => onOpenMemory(o.id as string)}>
+                          {o.title}
+                        </button>
+                      ) : (
+                        o.title
+                      )}
+                    </span>
+                  ))}
                 </div>
               )
             if (it.kind === 'notice')

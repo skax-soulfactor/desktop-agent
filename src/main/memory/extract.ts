@@ -29,7 +29,9 @@ const EXTRACT_PROMPT = `너는 데스크톱 에이전트의 기억 관리자다.
 기억 타입:
 - user: 사용자의 역할, 전문성, 선호 (예: "TypeScript 선호", "설명은 한국어로")
 - requirement: 진행 중인 작업, 목표, 제약, 결정 사항
-- lesson: 에이전트의 실수와 재발 방지 규칙. 본문은 반드시 "**상황:** ... **실수:** ... **원인:** ... **재발 방지:** ..." 형식
+- lesson: 에이전트의 실수와 재발 방지 규칙. 본문은 반드시 아래 네 항목을 각각 빈 줄(\\n\\n)로 구분해 작성하라.
+  "**상황:** ...\\n\\n**실수:** ...\\n\\n**원인:** ...\\n\\n**재발 방지:** ..."
+  한 줄로 이어 쓰지 마라. 사용자가 지식베이스 화면에서 항목별로 읽는다.
 - reference: 외부 자원 포인터 (URL, 문서 위치)
 
 규칙:
@@ -94,14 +96,14 @@ export async function extractMemories(
   const applied: MemoryOpSummary[] = []
   for (const op of object.ops) {
     if (op.op === 'create' && op.type && op.title && op.content) {
-      createMemory({
+      const created = createMemory({
         type: op.type,
         title: op.title,
         content: op.content,
         tags: op.tags ?? [],
         sourceSessionId: sessionId
       })
-      applied.push({ op: 'create', type: op.type, title: op.title })
+      applied.push({ op: 'create', type: op.type, title: op.title, id: created.id })
     } else if (op.op === 'update' && op.id) {
       const updated = updateMemory(op.id, {
         ...(op.type ? { type: op.type } : {}),
@@ -109,10 +111,12 @@ export async function extractMemories(
         ...(op.content ? { content: op.content } : {}),
         ...(op.tags ? { tags: op.tags } : {})
       })
-      if (updated) applied.push({ op: 'update', type: updated.type, title: updated.title })
+      if (updated)
+        applied.push({ op: 'update', type: updated.type, title: updated.title, id: updated.id })
     } else if (op.op === 'archive' && op.id) {
       const archived = updateMemory(op.id, { status: 'archived' })
-      if (archived) applied.push({ op: 'archive', type: archived.type, title: archived.title })
+      if (archived)
+        applied.push({ op: 'archive', type: archived.type, title: archived.title, id: archived.id })
     }
   }
   return applied

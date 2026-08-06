@@ -14,7 +14,7 @@ const RESPONDER_PROMPT = `너는 다른 사용자의 에이전트로부터 온 �
 
 /** 피어의 question 요청에 대해 지식베이스로 답변을 생성한다 (도구 없음, 공유 제외 기억 배제) */
 export async function answerQuestion(question: string): Promise<string> {
-  const memoryContext = buildMemoryContext(question, true)
+  const memoryContext = buildMemoryContext(question, { shareableOnly: true })
   const system = memoryContext ? `${RESPONDER_PROMPT}\n\n${memoryContext}` : RESPONDER_PROMPT
   const { model, config } = getModelFor('standard')
   const { text, usage } = await generateText({

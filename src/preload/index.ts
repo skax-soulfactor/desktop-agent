@@ -9,7 +9,10 @@ import type {
   ClarifyRequest,
   InboundRecord,
   McpServerConfig,
+  MemoryBulkAction,
   MemoryEntry,
+  MemoryReviewItem,
+  MemoryStats,
   ModelTier,
   NetworkConfig,
   Peer,
@@ -89,9 +92,26 @@ const api: DesktopAgentApi = {
   listAudit: (): Promise<AuditRecord[]> => ipcRenderer.invoke('audit:list'),
 
   listMemories: (): Promise<MemoryEntry[]> => ipcRenderer.invoke('memory:list'),
+  createMemory: (
+    data: Pick<MemoryEntry, 'type' | 'title' | 'content' | 'tags'>
+  ): Promise<MemoryEntry> => ipcRenderer.invoke('memory:create', data),
   deleteMemory: (id: string): Promise<void> => ipcRenderer.invoke('memory:delete', id),
   updateMemory: (id: string, patch: Partial<MemoryEntry>): Promise<MemoryEntry | null> =>
     ipcRenderer.invoke('memory:update', id, patch),
+  bulkMemory: (ids: string[], action: MemoryBulkAction, tag?: string): Promise<number> =>
+    ipcRenderer.invoke('memory:bulk', ids, action, tag),
+  mergeMemories: (keepId: string, dropIds: string[]): Promise<MemoryEntry | null> =>
+    ipcRenderer.invoke('memory:merge', keepId, dropIds),
+  memoryReview: (): Promise<MemoryReviewItem[]> => ipcRenderer.invoke('memory:review'),
+  markMemoryReviewed: (id: string): Promise<MemoryEntry | null> =>
+    ipcRenderer.invoke('memory:markReviewed', id),
+  memoryStats: (): Promise<MemoryStats> => ipcRenderer.invoke('memory:stats'),
+  memoryPreview: (query: string): Promise<{ text: string; tokens: number }> =>
+    ipcRenderer.invoke('memory:preview', query),
+  exportMemories: (format: 'json' | 'md'): Promise<string | null> =>
+    ipcRenderer.invoke('memory:export', format),
+  importMemories: (): Promise<{ added: number; skipped: number; error?: string } | null> =>
+    ipcRenderer.invoke('memory:import'),
 
   netConfig: (): Promise<NetworkConfig> => ipcRenderer.invoke('net:config'),
   netSaveConfig: (patch: Partial<NetworkConfig>): Promise<NetworkConfig> =>
