@@ -6,12 +6,13 @@ import MemoryView from './memory/MemoryView'
 import SchedulesView from './schedules/SchedulesView'
 import NetworkView from './network/NetworkView'
 import UsageView from './usage/UsageView'
+import NotificationsView from './notifications/NotificationsView'
 import NetworkApprovalModal from './network/NetworkApprovalModal'
 import ClarifyModal from './clarify/ClarifyModal'
 import SecretModal from './secrets/SecretModal'
 import NotifyHint from './NotifyHint'
 
-type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'usage' | 'settings'
+type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'usage' | 'notifications' | 'settings'
 
 /** 탭 간 이동 요청. nonce는 같은 대상을 연속으로 요청해도 반응하게 하는 값 */
 interface Jump {
@@ -26,12 +27,25 @@ export default function App(): JSX.Element {
   const [jumpSession, setJumpSession] = useState<Jump | null>(null)
   /** 대화 → 지식베이스: 방금 저장된 기억 열기 */
   const [jumpMemory, setJumpMemory] = useState<Jump | null>(null)
+  /** 알림 탭 배지에 쓰는 미확인 알림 수 */
+  const [unread, setUnread] = useState(0)
 
   useEffect(() => {
     void window.api.getAppVersion().then(setVersion)
   }, [])
 
-  const openSessionFromMemory = (sessionId: string): void => {
+  // 미확인 알림 수는 새 알림이 올 때와 알림 화면을 벗어날 때 바뀐다
+  useEffect(() => {
+    const refresh = async (): Promise<void> => {
+      const list = await window.api.listNotifications()
+      setUnread(list.filter((n) => !n.read).length)
+    }
+    void refresh()
+    return window.api.onNotificationsChanged(() => void refresh())
+  }, [page])
+
+  /** 지식베이스·알림에서 관련 대화 열기 */
+  const openSession = (sessionId: string): void => {
     setJumpSession({ id: sessionId, nonce: Date.now() })
     setPage('chat')
   }
@@ -63,21 +77,34 @@ export default function App(): JSX.Element {
         <button className={page === 'usage' ? 'active' : ''} onClick={() => setPage('usage')}>
           사용량
         </button>
+        <button
+          className={page === 'notifications' ? 'active' : ''}
+          onClick={() => setPage('notifications')}
+        >
+          알림
+          {unread > 0 && <span className="nav-badge">{unread > 99 ? '99+' : unread}</span>}
+        </button>
         <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>
           설정
         </button>
       </div>
-      <NotifyHint />
+      <NotifyHint onOpenNotifications={() => setPage('notifications')} />
       <div className="layout">
         {page === 'chat' && (
           <ChatView jumpSession={jumpSession} onOpenMemory={openMemoryFromChat} />
         )}
         {page === 'memory' && (
-          <MemoryView focusId={jumpMemory?.id ?? null} onOpenSession={openSessionFromMemory} />
+          <MemoryView focusId={jumpMemory?.id ?? null} onOpenSession={openSession} />
         )}
         {page === 'schedules' && <SchedulesView />}
         {page === 'network' && <NetworkView />}
         {page === 'usage' && <UsageView />}
+        {page === 'notifications' && (
+          <NotificationsView
+            onOpenSession={openSession}
+            onReadStateChange={() => setUnread(0)}
+          />
+        )}
         {page === 'settings' && <SettingsView />}
       </div>
       <ApprovalModal />

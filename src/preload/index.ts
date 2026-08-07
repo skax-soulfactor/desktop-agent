@@ -15,6 +15,7 @@ import type {
   MemoryStats,
   ModelTier,
   NetworkConfig,
+  NotificationRecord,
   Peer,
   PeerPolicy,
   PermissionRule,
@@ -160,6 +161,16 @@ const api: DesktopAgentApi = {
   mcpDelete: (id: string): Promise<void> => ipcRenderer.invoke('mcp:delete', id),
   mcpTest: (id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }> =>
     ipcRenderer.invoke('mcp:test', id),
+
+  listNotifications: (): Promise<NotificationRecord[]> => ipcRenderer.invoke('notifications:list'),
+  markNotificationsRead: (ids?: string[]): Promise<number> =>
+    ipcRenderer.invoke('notifications:markRead', ids),
+  clearNotifications: (): Promise<void> => ipcRenderer.invoke('notifications:clear'),
+  onNotificationsChanged: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('notifications:changed', handler)
+    return () => ipcRenderer.removeListener('notifications:changed', handler)
+  },
 
   openNotificationSettings: (): Promise<void> =>
     ipcRenderer.invoke('app:openNotificationSettings'),

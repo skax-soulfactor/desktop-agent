@@ -61,6 +61,12 @@ import { listMcpServers, saveMcpServer, deleteMcpServer } from './mcp/store'
 import { testMcpServer, invalidateMcpConnection } from './mcp/manager'
 import type { McpServerConfig } from '@shared/types'
 import { getAppVersion, getUpdateStatus, checkForUpdatesManual, quitAndInstall } from './update'
+import {
+  listNotifications,
+  markNotificationsRead,
+  clearNotifications
+} from './notifications/store'
+import { refreshBadge } from './notify'
 
 export function registerIpc(getWin: () => BrowserWindow): void {
   // 채팅
@@ -211,6 +217,18 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     await invalidateMcpConnection(id)
   })
   ipcMain.handle('mcp:test', (_e, id: string) => testMcpServer(id))
+
+  // 알림 내역 — OS 알림이 꺼져 있어 놓친 건도 여기서 확인할 수 있다
+  ipcMain.handle('notifications:list', () => listNotifications())
+  ipcMain.handle('notifications:markRead', (_e, ids?: string[]) => {
+    const left = markNotificationsRead(ids)
+    refreshBadge()
+    return left
+  })
+  ipcMain.handle('notifications:clear', () => {
+    clearNotifications()
+    refreshBadge()
+  })
 
   // OS 알림 설정 화면 열기 (사용자가 알림을 켜도록 안내)
   ipcMain.handle('app:openNotificationSettings', () => {

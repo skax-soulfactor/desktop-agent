@@ -70,6 +70,12 @@ body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw)
 }
 .topnav button:hover { color: var(--text); background: var(--panel-2); }
 .topnav button.active { color: var(--text); background: var(--panel-2); }
+/* 미확인 알림 수 — 탭 이름 옆의 작은 칩 */
+.topnav .nav-badge {
+  display: inline-block; margin-left: 6px; padding: 0 6px; min-width: 16px;
+  border-radius: 999px; background: var(--danger); color: #fff;
+  font-size: 10.5px; line-height: 16px; text-align: center;
+}
 
 /* 알림 허용 안내 배너 (닫기 전까지 1회 표시) */
 .notif-hint {
@@ -85,6 +91,11 @@ body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw)
   border-radius: 8px; padding: 5px 12px; font-size: 12px; white-space: nowrap;
 }
 .notif-hint .open:hover { background: var(--accent-dim); }
+.notif-hint .later {
+  background: transparent; color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 12px; font-size: 12px; white-space: nowrap;
+}
+.notif-hint .later:hover { color: var(--text); border-color: var(--text-dim); }
 .notif-hint .close {
   background: none; border: none; color: var(--text-dim); font-size: 16px;
   line-height: 1; padding: 0 4px;
@@ -537,6 +548,37 @@ button.link {
   font-size: inherit; text-align: left; border-radius: 0;
 }
 button.link:hover { color: var(--accent-dim); text-decoration: underline; border-color: transparent; }
+
+/* ── 알림 내역 ────────────────────────────────────────────── */
+
+.notif-settings { display: flex; align-items: center; gap: 14px; }
+.notif-settings .txt { flex: 1; font-size: 13px; color: var(--text-dim); line-height: 1.55; }
+.notif-settings button { white-space: nowrap; }
+
+.notif-toolbar { display: flex; align-items: center; gap: 12px; font-size: 12.5px; }
+.notif-toolbar .spacer { flex: 1; }
+.notif-toolbar .dim { color: var(--text-dim); }
+.notif-toolbar label { display: flex; align-items: center; gap: 4px; }
+.notif-toolbar button { padding: 4px 10px; font-size: 12.5px; }
+.notif-toolbar button:disabled { opacity: 0.5; cursor: default; }
+
+.notif-list { padding: 0; }
+.notif-row { display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.notif-row:last-child { border-bottom: none; }
+/* 아직 확인하지 않은 알림은 왼쪽 강조선으로 구분 */
+.notif-row.fresh { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.notif-row .ic { font-size: 14px; line-height: 1.5; }
+.notif-row .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.notif-row .head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.notif-row .kind {
+  font-size: 11px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-dim);
+}
+.notif-row .title { font-size: 13.5px; font-weight: 550; }
+.notif-row .undelivered { font-size: 11px; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 999px; padding: 1px 7px; }
+.notif-row .at { margin-left: auto; font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
+.notif-row .text { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.notif-row .link { font-size: 12px; align-self: flex-start; }
 
 /* ── 지식베이스 ───────────────────────────────────────────── */
 

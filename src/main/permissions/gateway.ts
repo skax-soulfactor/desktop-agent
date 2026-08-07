@@ -35,7 +35,11 @@ export function respondToApproval(requestId: string, decision: ApprovalDecision)
   p.resolve(decision)
 }
 
-function askUser(win: BrowserWindow, req: ApprovalRequest): Promise<ApprovalDecision> {
+function askUser(
+  win: BrowserWindow,
+  req: ApprovalRequest,
+  sessionId: string
+): Promise<ApprovalDecision> {
   return new Promise((resolve) => {
     const timer = setTimeout(
       () => {
@@ -46,7 +50,7 @@ function askUser(win: BrowserWindow, req: ApprovalRequest): Promise<ApprovalDeci
     )
     pending.set(req.requestId, { resolve, timer })
     win.webContents.send('approval:request', req)
-    notifyIfBackground(win, '도구 실행 승인 필요', req.summary)
+    notifyIfBackground(win, '도구 실행 승인 필요', req.summary, { kind: 'approval', sessionId })
   })
 }
 
@@ -113,16 +117,20 @@ export async function checkPermission(win: BrowserWindow, g: GateInput): Promise
 
   // 3. 사용자에게 질문 — 유사 교훈이 있으면 다이얼로그에 함께 표시
   const lessons = searchLessons(`${g.toolName} ${g.summary}`, 3).map((m) => m.title)
-  const decision = await askUser(win, {
-    requestId: crypto.randomUUID(),
-    toolName: g.toolName,
-    summary: g.summary,
-    risk: g.risk,
-    input: g.inputJson,
-    suggestedPattern: g.suggestedPattern,
-    lessons,
-    purpose: g.purpose
-  })
+  const decision = await askUser(
+    win,
+    {
+      requestId: crypto.randomUUID(),
+      toolName: g.toolName,
+      summary: g.summary,
+      risk: g.risk,
+      input: g.inputJson,
+      suggestedPattern: g.suggestedPattern,
+      lessons,
+      purpose: g.purpose
+    },
+    g.sessionId
+  )
 
   if (decision.action === 'allow' && (decision.scope === 'session' || decision.scope === 'always')) {
     addRule({

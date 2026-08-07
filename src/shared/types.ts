@@ -403,3 +403,25 @@ export interface McpServerConfig {
   lastStatus?: { ok: boolean; tools?: string[]; error?: string; at: string }
   createdAt: string
 }
+
+// ─────────────────────────── 알림 ───────────────────────────
+
+export type NotificationKind = 'task' | 'question' | 'approval' | 'secret' | 'system'
+
+/**
+ * 사용자에게 알린(또는 알리려 한) 사건 1건의 기록.
+ * OS 알림이 꺼져 있거나 창을 보고 있어서 실제로 표시되지 않았더라도 남기므로,
+ * 알림 화면에서 놓친 내역을 나중에 확인할 수 있다.
+ */
+export interface NotificationRecord {
+  id: string
+  at: string
+  kind: NotificationKind
+  title: string
+  body: string
+  /** OS 알림을 실제로 띄웠는지 (창이 포커스 상태거나 알림 미지원이면 false) */
+  delivered: boolean
+  /** 알림 화면에서 아직 확인하지 않았으면 false */
+  read: boolean
+  sessionId?: string
+}

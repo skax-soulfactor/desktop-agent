@@ -6,6 +6,7 @@ import { startScheduler } from './agent/scheduler'
 import { initNetwork } from './network/manager'
 import { closeAllMcpConnections } from './mcp/manager'
 import { initUpdater } from './update'
+import { refreshBadge } from './notify'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -58,6 +59,8 @@ app.whenReady().then(() => {
     return mainWindow
   })
   createWindow()
+  // 지난 실행에서 확인하지 않은 알림이 있으면 배지를 복원한다
+  refreshBadge()
   startScheduler(() => mainWindow)
   void initNetwork(() => mainWindow)
   // 자동 업데이트: 이벤트를 렌더러로 연결하고, 패키징된 빌드에서는 주기적으로 확인한다

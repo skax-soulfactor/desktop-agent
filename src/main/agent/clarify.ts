@@ -78,7 +78,7 @@ export function clarifyTool(ctx: ClarifyContext): ToolSet {
             openRequests.push(req)
             ctx.abortSignal.addEventListener('abort', onAbort, { once: true })
             ctx.win.webContents.send('clarify:request', req)
-            notifyIfBackground(ctx.win, `질문: ${ctx.taskTitle}`, question)
+            notifyIfBackground(ctx.win, `질문: ${ctx.taskTitle}`, question, { kind: 'question' })
           })
           return { answer }
         } finally {

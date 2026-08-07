@@ -15,6 +15,7 @@ import type {
   MemoryStats,
   ModelTier,
   NetworkConfig,
+  NotificationRecord,
   Peer,
   PeerPolicy,
   PermissionRule,
@@ -127,6 +128,13 @@ export interface DesktopAgentApi {
   mcpSave(config: McpServerConfig): Promise<void>
   mcpDelete(id: string): Promise<void>
   mcpTest(id: string): Promise<{ ok: boolean; tools?: string[]; error?: string }>
+
+  // 알림 내역
+  listNotifications(): Promise<NotificationRecord[]>
+  /** ids를 주면 해당 알림만, 없으면 전부 읽음 처리하고 남은 미확인 수를 반환 */
+  markNotificationsRead(ids?: string[]): Promise<number>
+  clearNotifications(): Promise<void>
+  onNotificationsChanged(cb: () => void): () => void
 
   // OS 알림 설정 화면 열기
   openNotificationSettings(): Promise<void>

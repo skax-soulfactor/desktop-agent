@@ -62,6 +62,6 @@ export function requestSecretFromUser(
     pending.set(req.requestId, { name, resolve, timer })
     openRequests.push(req)
     win.webContents.send('secret:request', req)
-    notifyIfBackground(win, `시크릿 입력 요청: ${name}`, purpose)
+    notifyIfBackground(win, `시크릿 입력 요청: ${name}`, purpose, { kind: 'secret' })
   })
 }

@@ -242,7 +242,10 @@ function finishTask(win: BrowserWindow, info: TaskInfo, status: TaskStatus, resu
   emit(win, info)
   // 취소는 사용자가 직접 한 행동이므로 알리지 않는다
   if (status !== 'cancelled') {
-    notifyIfBackground(win, `작업 ${STATUS_LABEL[status]}: ${info.title}`, info.result)
+    notifyIfBackground(win, `작업 ${STATUS_LABEL[status]}: ${info.title}`, info.result, {
+      kind: 'task',
+      sessionId: info.sessionId
+    })
   }
 
   // 결과 카드(작업 과정 로그 포함)를 대화에 남기고,
