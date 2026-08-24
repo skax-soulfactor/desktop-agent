@@ -80,23 +80,30 @@ function MsgMeta({
 }
 
 /** 발췌 안의 검색어 첫 일치를 강조 표시 */
-function HighlightedSnippet({ text, query }: { text: string; query: string }): JSX.Element {
-  const q = query.trim().toLowerCase()
-  const pos = q ? text.toLowerCase().indexOf(q) : -1
+/** 평문에서 검색어와 일치하는 모든 구간을 <mark>로 감싼다 */
+function Marked({ text, query }: { text: string; query?: string }): JSX.Element {
+  const q = (query ?? '').trim().toLowerCase()
+  if (!q) return <>{text}</>
+  const lower = text.toLowerCase()
+  const parts: JSX.Element[] = []
+  let from = 0
+  let pos = lower.indexOf(q)
   if (pos < 0) return <>{text}</>
-  return (
-    <>
-      {text.slice(0, pos)}
-      <mark>{text.slice(pos, pos + q.length)}</mark>
-      {text.slice(pos + q.length)}
-    </>
-  )
+  while (pos >= 0) {
+    if (pos > from) parts.push(<span key={`t${from}`}>{text.slice(from, pos)}</span>)
+    parts.push(<mark key={`m${pos}`}>{text.slice(pos, pos + q.length)}</mark>)
+    from = pos + q.length
+    pos = lower.indexOf(q, from)
+  }
+  if (from < text.length) parts.push(<span key={`t${from}`}>{text.slice(from)}</span>)
+  return <>{parts}</>
 }
 
 const HIT_KIND_LABEL: Record<SessionSearchHit['kind'], string> = {
   title: '제목',
   user: '나',
-  assistant: '에이전트'
+  assistant: '에이전트',
+  task: '작업'
 }
 
 const TIER_LABEL: Record<string, string> = { light: '경량', standard: '일반', advanced: '고급' }
@@ -109,19 +116,29 @@ const TOOL_STATUS_LABEL: Record<string, string> = {
   aborted: '중단됨'
 }
 
-function ToolCard({ item }: { item: ChatItem & { kind: 'tool' } }): JSX.Element {
+function ToolCard({
+  item,
+  idx,
+  highlight
+}: {
+  item: ChatItem & { kind: 'tool' }
+  idx?: number
+  highlight?: string
+}): JSX.Element {
   /* 출력은 접힌 칩이 기본 — 헤더 클릭으로 펼친다 */
   const [open, setOpen] = useState(false)
   const expandable = Boolean(item.output)
   return (
-    <div className="toolcard">
+    <div className="toolcard" data-idx={idx}>
       <div
         className={`head ${expandable ? 'clickable' : ''}`}
         onClick={() => expandable && setOpen((v) => !v)}
         title={expandable ? '클릭해 출력 펼치기/접기' : undefined}
       >
         <span className={`badge ${item.status}`}>{TOOL_STATUS_LABEL[item.status]}</span>
-        <span>{item.summary}</span>
+        <span>
+          <Marked text={item.summary} query={highlight} />
+        </span>
         {expandable && <span className="chev">{open ? '▾' : '▸'}</span>}
       </div>
       {open && item.output && <pre>{item.output}</pre>}
@@ -130,7 +147,7 @@ function ToolCard({ item }: { item: ChatItem & { kind: 'tool' } }): JSX.Element 
 }
 
 /** 워커(서브 에이전트)의 작업 과정 — 메인 대화처럼 텍스트와 도구 카드를 순서대로 표시 */
-function WorkLog({ items }: { items: ChatItem[] }): JSX.Element {
+function WorkLog({ items, highlight }: { items: ChatItem[]; highlight?: string }): JSX.Element {
   return (
     <div className="worklog">
       {items.length === 0 && <div className="empty">아직 활동이 없습니다.</div>}
@@ -138,10 +155,10 @@ function WorkLog({ items }: { items: ChatItem[] }): JSX.Element {
         if (it.kind === 'assistant')
           return (
             <div key={i} className="msg assistant">
-              <Markdown text={it.text} />
+              <Markdown text={it.text} highlight={highlight} />
             </div>
           )
-        if (it.kind === 'tool') return <ToolCard key={i} item={it} />
+        if (it.kind === 'tool') return <ToolCard key={i} item={it} highlight={highlight} />
         return null
       })}
     </div>
@@ -190,8 +207,17 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
   const [search, setSearch] = useState('')
   /** null = 검색 중(디바운스 대기 포함) */
   const [searchHits, setSearchHits] = useState<SessionSearchHit[] | null>(null)
-  /** 검색 결과 클릭 시 세션 로드 후 스크롤할 메시지 인덱스 */
-  const pendingScrollIdx = useRef<number | null>(null)
+  /**
+   * 검색 결과로 이동할 대상. nonce로 같은 항목을 다시 눌러도 반응한다.
+   * query는 본문 하이라이트에 쓰이며, 검색을 지울 때까지 남는다.
+   */
+  const [jump, setJump] = useState<{ idx: number; query: string; nonce: number } | null>(null)
+  /** 이미 처리한 jump의 nonce — items가 바뀔 때마다 다시 튀지 않게 한다 */
+  const handledJump = useRef(-1)
+  const jumpNonce = useRef(0)
+  const messagesRef = useRef<HTMLDivElement>(null)
+  /** 하단을 따라가는 중인지 — 위를 읽고 있을 때 새 메시지가 끌어내리지 않도록 */
+  const stickToBottom = useRef(true)
   /** 잠시 강조 표시할 메시지 인덱스 */
   const [highlightIdx, setHighlightIdx] = useState<number | null>(null)
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -383,6 +409,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
   useEffect(() => {
     if (!search.trim()) {
       setSearchHits(null)
+      setJump(null)
       return
     }
     setSearchHits(null)
@@ -398,25 +425,57 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
     }
   }, [search])
 
+  // 검색 결과에서 진입한 경우 해당 항목으로, 그 외에는 (따라가는 중일 때만) 맨 아래로
   useEffect(() => {
-    // 검색 결과에서 진입한 경우 해당 메시지로, 그 외에는 맨 아래로 스크롤
-    if (pendingScrollIdx.current !== null) {
-      const idx = pendingScrollIdx.current
-      pendingScrollIdx.current = null
-      document
-        .querySelector(`.messages [data-idx="${idx}"]`)
-        ?.scrollIntoView({ block: 'center' })
-      setHighlightIdx(idx)
-      if (highlightTimer.current) clearTimeout(highlightTimer.current)
-      highlightTimer.current = setTimeout(() => setHighlightIdx(null), 2000)
-    } else {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (jump && handledJump.current !== jump.nonce) {
+      handledJump.current = jump.nonce
+      // 작업 카드의 일치가 접힌 '과정' 안에 있으면 펼쳐야 보인다
+      const target = items[jump.idx]
+      if (target?.kind === 'task') {
+        const q = jump.query.trim().toLowerCase()
+        const inHead =
+          target.title.toLowerCase().includes(q) || (target.result ?? '').toLowerCase().includes(q)
+        if (!inHead) setOpenLogs((prev) => new Set(prev).add(target.taskId))
+      }
+      let tries = 0
+      let settles = 0
+      let timer: ReturnType<typeof setTimeout>
+      // 항목이 아직 그려지지 않았을 수 있어 잠깐씩 기다리며 다시 찾는다.
+      // (창이 가려져 있으면 rAF가 멈추므로 타이머를 쓴다)
+      const run = (): void => {
+        const el = messagesRef.current?.querySelector(`[data-idx="${jump.idx}"]`)
+        if (!el) {
+          if (tries++ < 40) timer = setTimeout(run, 25)
+          return
+        }
+        el.scrollIntoView({ block: 'center' })
+        stickToBottom.current = false
+        setHighlightIdx(jump.idx)
+        if (highlightTimer.current) clearTimeout(highlightTimer.current)
+        highlightTimer.current = setTimeout(() => setHighlightIdx(null), 2000)
+        // 카드를 가운데 두는 것으로는 부족하다 — 작업 카드처럼 키가 크면 일치 지점이
+        // 화면 밖에 남는다. 일치 표시가 나타나는 대로(과정 로그 펼침 등) 그 지점에 맞춘다.
+        const settle = (): void => {
+          const mark = el.querySelector('mark')
+          if (mark) mark.scrollIntoView({ block: 'center' })
+          else if (settles++ < 12) timer = setTimeout(settle, 25)
+          else el.scrollIntoView({ block: 'center' })
+        }
+        timer = setTimeout(settle, 25)
+      }
+      run()
+      return () => clearTimeout(timer)
     }
-  }, [items])
+    if (stickToBottom.current) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    return undefined
+  }, [items, jump])
 
-  const openSession = async (id: string): Promise<void> => {
+  const openSession = async (id: string, jumpTo?: { idx: number; query: string }): Promise<void> => {
     const s = await window.api.getSession(id)
     if (s) {
+      // 점프 대상이 없으면 평소대로 맨 아래에서 시작한다
+      stickToBottom.current = !jumpTo
+      setJump(jumpTo ? { ...jumpTo, nonce: ++jumpNonce.current } : null)
       setActiveId(id)
       setItems(s.items)
       setError(null)
@@ -431,8 +490,10 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
   }
 
   const openHit = async (hit: SessionSearchHit): Promise<void> => {
-    if (hit.itemIndex >= 0) pendingScrollIdx.current = hit.itemIndex
-    await openSession(hit.sessionId)
+    await openSession(
+      hit.sessionId,
+      hit.itemIndex >= 0 ? { idx: hit.itemIndex, query: search } : undefined
+    )
   }
 
   const newSession = async (): Promise<void> => {
@@ -588,7 +649,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
                 <div className="hit-title">{h.title}</div>
                 <div className="hit-snippet">
                   <span className="hit-kind">{HIT_KIND_LABEL[h.kind]}</span>
-                  <HighlightedSnippet text={h.snippet} query={search} />
+                  <Marked text={h.snippet} query={search} />
                 </div>
               </div>
             ))}
@@ -670,19 +731,30 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
             </div>
           )
         })()}
-        <div className="messages" onMouseUp={onMessagesMouseUp} onScroll={() => setSelPop(null)}>
+        <div
+          className="messages"
+          ref={messagesRef}
+          onMouseUp={onMessagesMouseUp}
+          onScroll={(e) => {
+            setSelPop(null)
+            const box = e.currentTarget
+            stickToBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight <= 120
+          }}
+        >
           <div className="msg-col">
           {items.length === 0 && (
             <div className="empty">무엇을 도와드릴까요? 파일 정리, 스크립트 실행 등 데스크톱 작업을 요청해 보세요.</div>
           )}
           {items.map((it, i) => {
+            // 검색으로 이동해 온 항목에만 본문 하이라이트를 건다
+            const hl = jump && jump.idx === i ? jump.query : undefined
             if (it.kind === 'user') {
               const { quote: q, body } = splitLeadingQuote(it.text)
               return (
                 <div key={i} data-idx={i} className={`msg-wrap user ${highlightIdx === i ? 'hl' : ''}`}>
                   <div className="msg user">
                     {q && <div className="uquote">{q}</div>}
-                    {body}
+                    <Marked text={body} query={hl} />
                     {it.attachments && it.attachments.length > 0 && (
                       <div className="file-chips">
                         {it.attachments.map((a, j) => (
@@ -701,7 +773,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
               return (
                 <div key={i} data-idx={i} className={`msg-wrap assistant ${highlightIdx === i ? 'hl' : ''}`}>
                   <div className="msg assistant">
-                    <Markdown text={it.text} />
+                    <Markdown text={it.text} highlight={hl} />
                   </div>
                   <MsgMeta
                     at={it.at}
@@ -713,7 +785,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
               )
             if (it.kind === 'memory')
               return (
-                <div key={i} className="memcard">
+                <div key={i} data-idx={i} className={`memcard ${highlightIdx === i ? 'hl' : ''}`}>
                   기억함:{' '}
                   {it.ops.map((o, k) => (
                     <span key={k}>
@@ -731,14 +803,22 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
               )
             if (it.kind === 'notice')
               return (
-                <div key={i} className="memcard notice">
+                <div
+                  key={i}
+                  data-idx={i}
+                  className={`memcard notice ${highlightIdx === i ? 'hl' : ''}`}
+                >
                   {it.text}
                 </div>
               )
             if (it.kind === 'task') {
               const logOpen = openLogs.has(it.taskId)
               return (
-                <div key={i} className="toolcard task">
+                <div
+                  key={i}
+                  data-idx={i}
+                  className={`toolcard task ${highlightIdx === i ? 'hl' : ''}`}
+                >
                   <div className="head">
                     <span
                       className={`badge ${
@@ -747,7 +827,9 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
                     >
                       {it.status === 'done' ? '작업 완료' : it.status === 'cancelled' ? '작업 취소됨' : '작업 실패'}
                     </span>
-                    <span>{it.title}</span>
+                    <span>
+                      <Marked text={it.title} query={hl} />
+                    </span>
                     {it.usage && (
                       <span
                         className="tokens"
@@ -772,10 +854,10 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
                       </button>
                     )}
                   </div>
-                  {logOpen && it.log && <WorkLog items={it.log} />}
+                  {logOpen && it.log && <WorkLog items={it.log} highlight={hl} />}
                   {it.result && (
                     <div className="task-result">
-                      <Markdown text={it.result} />
+                      <Markdown text={it.result} highlight={hl} />
                       <div className="msg-meta">
                         <button
                           className="copy"
@@ -790,7 +872,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
                 </div>
               )
             }
-            return <ToolCard key={i} item={it} />
+            return <ToolCard key={i} item={it} idx={i} highlight={hl} />
           })}
           {busy && progress && (
             <div className="msg-wrap assistant">

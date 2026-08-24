@@ -80,8 +80,18 @@ function makeSnippet(text: string, pos: number, matchLen: number): string {
   return head + text.slice(start, end).replace(/\n+/g, ' ') + tail
 }
 
+/** 작업 카드에서 검색 대상이 되는 텍스트 — 제목, 결과, 워커의 발언 (도구 호출은 본문 검색과 같이 제외) */
+function taskTexts(item: ChatItem & { kind: 'task' }): string[] {
+  const texts = [item.title]
+  if (item.result) texts.push(item.result)
+  for (const sub of item.log ?? []) {
+    if (sub.kind === 'assistant' || sub.kind === 'user') texts.push(sub.text)
+  }
+  return texts
+}
+
 /**
- * 모든 세션의 제목과 사용자/에이전트 메시지를 대소문자 구분 없이 검색한다.
+ * 모든 세션의 제목과 사용자/에이전트 메시지, 백그라운드 작업 카드를 대소문자 구분 없이 검색한다.
  * 최근 대화 순으로 훑고, 세션당 메시지 일치는 여러 건 나올 수 있다.
  */
 export function searchSessions(query: string, limit = 50): SessionSearchHit[] {
@@ -100,10 +110,20 @@ export function searchSessions(query: string, limit = 50): SessionSearchHit[] {
     }
     for (let i = 0; i < s.items.length && hits.length < limit; i++) {
       const it = s.items[i]
-      if (it.kind !== 'user' && it.kind !== 'assistant') continue
-      const pos = it.text.toLowerCase().indexOf(q)
-      if (pos < 0) continue
-      hits.push({ ...base, itemIndex: i, kind: it.kind, snippet: makeSnippet(it.text, pos, q.length) })
+      if (it.kind === 'user' || it.kind === 'assistant') {
+        const pos = it.text.toLowerCase().indexOf(q)
+        if (pos < 0) continue
+        hits.push({ ...base, itemIndex: i, kind: it.kind, snippet: makeSnippet(it.text, pos, q.length) })
+      } else if (it.kind === 'task') {
+        // 백그라운드 작업의 본문은 카드 안(제목·결과·워커 로그)에 있다.
+        // 어디서 걸렸든 카드 위치로 안내하고, 카드당 한 건만 낸다.
+        for (const text of taskTexts(it)) {
+          const pos = text.toLowerCase().indexOf(q)
+          if (pos < 0) continue
+          hits.push({ ...base, itemIndex: i, kind: 'task', snippet: makeSnippet(text, pos, q.length) })
+          break
+        }
+      }
     }
   }
   return hits

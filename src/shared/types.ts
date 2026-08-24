@@ -58,7 +58,7 @@ export interface SessionSearchHit {
   updatedAt: string
   /** 일치한 메시지의 items 인덱스 (제목 일치는 -1) */
   itemIndex: number
-  kind: 'title' | 'user' | 'assistant'
+  kind: 'title' | 'user' | 'assistant' | 'task'
   /** 일치 지점 주변 발췌 */
   snippet: string
 }

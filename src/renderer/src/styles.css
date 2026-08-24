@@ -258,11 +258,15 @@ body.resizing * { cursor: col-resize !important; }
 @media (max-width: 900px) { .usage-breakdowns { grid-template-columns: 1fr; } }
 
 /* 검색 결과로 이동한 메시지 강조 */
-.msg-wrap.hl .msg { animation: hit-flash 2s ease-out; }
+.msg-wrap.hl .msg,
+.memcard.hl,
+.toolcard.hl { animation: hit-flash 2s ease-out; }
 @keyframes hit-flash {
   0%, 55% { box-shadow: 0 0 0 2px var(--warn); border-radius: 12px; }
   100% { box-shadow: 0 0 0 2px transparent; }
 }
+/* 이동한 항목 본문의 검색어 — 강조가 사라진 뒤에도 어디가 걸렸는지 보이게 남는다 */
+.messages mark { background: var(--warn); color: #1a1a1a; border-radius: 2px; padding: 0 1px; }
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
 
