@@ -1,3 +1,15 @@
+/** AI SDK는 진짜 실패 이유를 message가 아니라 cause에 넣는다 — 사슬을 따라가 모은다 */
+function causeDetail(e: unknown): string {
+  const parts: string[] = []
+  let cur: unknown = (e as { cause?: unknown }).cause
+  for (let depth = 0; cur && depth < 3; depth++) {
+    const msg = (cur as { message?: string }).message ?? String(cur)
+    if (msg) parts.push(msg.slice(0, 400))
+    cur = (cur as { cause?: unknown }).cause
+  }
+  return parts.length > 0 ? ` (원인: ${parts.join(' ← ')})` : ''
+}
+
 /** API 오류를 사용자가 조치할 수 있는 메시지로 변환 */
 export function describeError(e: unknown): string {
   const err = e as { message?: string; statusCode?: number; url?: string; responseBody?: string }
@@ -25,5 +37,5 @@ export function describeError(e: unknown): string {
     )
   }
   const detail = err.responseBody ? ` — ${String(err.responseBody).slice(0, 300)}` : ''
-  return (err.message ?? String(e)) + detail
+  return (err.message ?? String(e)) + detail + causeDetail(e)
 }

@@ -1,6 +1,6 @@
-import { generateText } from 'ai'
 import { z } from 'zod'
 import type { MemoryOpSummary } from '@shared/types'
+import { completeText } from '../llm/complete'
 import { getModelFor } from '../llm/providers'
 import { createMemory, listMemories, updateMemory } from './store'
 import { recordUsage } from '../usage/store'
@@ -81,8 +81,8 @@ export async function extractMemories(
       : ''
 
   // generateObject(구조화 출력)는 일부 모델이 미지원이라, 어떤 챗 모델에서도 동작하는
-  // generateText + 관대한 JSON 파싱을 사용한다
-  const { text, usage } = await generateText({
+  // 텍스트 생성 + 관대한 JSON 파싱을 사용한다
+  const { text, usage } = await completeText({
     model,
     system: EXTRACT_PROMPT,
     prompt: `## 기존 기억 목록\n${existing || '(없음)'}\n\n## 이번 턴 대화\n${turnTranscript.slice(-8000)}${failureText}`

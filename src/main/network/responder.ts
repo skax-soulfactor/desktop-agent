@@ -1,4 +1,5 @@
-import { generateText, stepCountIs } from 'ai'
+import { stepCountIs } from 'ai'
+import { completeText } from '../llm/complete'
 import { getModelFor } from '../llm/providers'
 import { buildMemoryContext } from '../memory/recall'
 import { recordUsage } from '../usage/store'
@@ -17,7 +18,7 @@ export async function answerQuestion(question: string): Promise<string> {
   const memoryContext = buildMemoryContext(question, { shareableOnly: true })
   const system = memoryContext ? `${RESPONDER_PROMPT}\n\n${memoryContext}` : RESPONDER_PROMPT
   const { model, config } = getModelFor('standard')
-  const { text, usage } = await generateText({
+  const { text, usage } = await completeText({
     model,
     system,
     prompt: question,

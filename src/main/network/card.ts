@@ -1,6 +1,6 @@
-import { generateText } from 'ai'
 import { z } from 'zod'
 import type { AgentCard } from '@shared/types'
+import { completeText } from '../llm/complete'
 import { getModelFor } from '../llm/providers'
 import { listMemories } from '../memory/store'
 import { getMyCard, saveMyCard, getNetworkConfig } from './store'
@@ -52,7 +52,7 @@ export async function regenerateCard(): Promise<AgentCard> {
   const index = shareable.map((m) => `- [${m.type}] ${m.title} (${m.tags.join(', ')})`).join('\n')
 
   const { model, config } = getModelFor('light')
-  const { text, usage } = await generateText({
+  const { text, usage } = await completeText({
     model,
     system: PROMPT,
     prompt: `## 지식베이스 인덱스 (공유 가능 항목)\n${index || '(비어 있음)'}`
