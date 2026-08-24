@@ -217,7 +217,8 @@ export default function MemoryView({ focusId, onOpenSession }: Props): JSX.Eleme
 
       {loading ? (
         <div className="empty">불러오는 중…</div>
-      ) : entries.length === 0 ? (
+      ) : entries.length === 0 && !composing ? (
+        // 비어 있어도 '기억 추가'는 눌러야 열린다 — 작성 폼은 아래 작업대 안에 있다
         <div className="empty">
           아직 기억이 없습니다. 에이전트와 협업하면 요구사항과 교훈이 자동으로 축적됩니다.
         </div>
