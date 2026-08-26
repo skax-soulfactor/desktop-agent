@@ -2,9 +2,9 @@ import { streamText, stepCountIs, type ToolSet } from 'ai'
 import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
-import { buildAttachmentParts } from './attachments'
+import { buildAttachmentParts, buildUserContent } from './attachments'
 import { resolveModelFor } from '../llm/providers'
-import { estimateTokens, type ModelProfile } from '../llm/profile'
+import { estimateTokens, fitToTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, PURPOSE_DESCRIPTION, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
@@ -66,6 +66,7 @@ function compactSystemPrompt(): string[] {
     '## 규칙',
     '- 결론부터 답하라. "확인 중입니다", "잠시만요"만 남기고 턴을 끝내지 마라.',
     '- 사용자가 준 텍스트를 되풀이하지 마라. 번역·요약·교정 요청이면 결과물만 내라 — 원문을 다시 인용하면 정작 결과가 잘린다.',
+    '- 첨부(문서 본문·이미지·PDF)는 메시지 안에 이미 들어 있다. 직접 읽고 처리하라. 파일을 다시 달라고 하지 마라.',
     '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
     '- 파일 읽기·목록 확인·상태 조회는 fs_read/fs_list/shell_exec로 직접 실행하고 그 자리에서 답하라.',
     '  "실행해도 될까요?"라고 되묻지 마라 — 승인 창은 앱이 자동으로 띄운다.',
@@ -180,7 +181,6 @@ function estimateToolTokens(tools: ToolSet): number {
  * 것이므로 함께 버린다.
  */
 function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: number): T[] {
-  if (messages.length <= 1) return messages
   const cost = (m: T): number => estimateTokens(JSON.stringify(m))
 
   const kept: T[] = []
@@ -194,7 +194,48 @@ function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: nu
   }
   // 잘린 지점이 도구 결과 한가운데면 그 앞의 assistant까지 함께 버린다
   while (kept.length > 1 && kept[0].role === 'tool') kept.shift()
+
+  // 메시지 하나만 남았는데 그것도 예산을 넘으면(대용량 첨부·긴 붙여넣기) 본문을 줄인다
+  const last = kept[kept.length - 1]
+  if (kept.length === 1 && last && cost(last) > budgetTokens) {
+    kept[0] = fitMessage(last, budgetTokens)
+  }
   return kept
+}
+
+/**
+ * 메시지 하나가 예산을 통째로 넘길 때 그 안의 텍스트를 줄인다.
+ *
+ * 그냥 보내면 서버가 알아서 처리하는데, 그 결과가 예측 불가능하다 — Ollama는 큰 내용을
+ * 잘라 주기도 하고 통째로 버리기도 한다(그러면 모델이 "첨부파일이 없습니다"라고 답한다).
+ * 여기서 직접 자르고 잘렸다고 적어 두면, 적어도 앞부분은 확실히 전달되고 모델이
+ * 일부만 봤다는 사실을 사용자에게 알릴 수 있다.
+ */
+function fitMessage<T extends { role: string }>(message: T, budgetTokens: number): T {
+  // 잘림 사실만 설명하다 정작 요청을 처리하지 않는 응답이 나오지 않도록,
+  // "받은 만큼 처리하라"를 먼저 지시하고 안내는 마지막 한 줄로 제한한다
+  const NOTE =
+    '\n\n...[내용이 길어 여기까지만 전달되었다. 받은 부분까지 요청을 그대로 수행하고, 맨 마지막에 한 줄로 "문서가 길어 앞부분만 처리했다"고만 덧붙여라.]'
+  const room = Math.max(256, budgetTokens - estimateTokens(NOTE))
+  const { content } = message as { content?: unknown }
+
+  if (typeof content === 'string') {
+    return { ...message, content: fitToTokens(content, room) + NOTE }
+  }
+  if (Array.isArray(content)) {
+    // 이미지·PDF 파트는 자를 수 없으니 텍스트 파트만 줄인다
+    const texts = content.filter((p: unknown) => (p as { type?: string }).type === 'text')
+    if (texts.length === 0) return message
+    const share = Math.max(256, Math.floor(room / texts.length))
+    const next = content.map((p: unknown) => {
+      const part = p as { type?: string; text?: string }
+      if (part.type !== 'text' || typeof part.text !== 'string') return p
+      if (estimateTokens(part.text) <= share) return p
+      return { ...part, text: fitToTokens(part.text, share) + NOTE }
+    })
+    return { ...message, content: next }
+  }
+  return message
 }
 
 /**
@@ -277,7 +318,7 @@ export async function runTurn(
   })
   session.messages.push({
     role: 'user',
-    content: parts.length > 0 ? [...parts, { type: 'text', text: userText }] : userText
+    content: parts.length > 0 ? buildUserContent(parts, userText) : userText
   })
   if (!session.meta.titlePinned && session.meta.title === '새 대화') {
     session.meta.title = userText.slice(0, 40)

@@ -37,6 +37,30 @@ function inline(name: string, body: string): UserPart {
 }
 
 /**
+ * 첨부 파트와 사용자 문장을 한 메시지의 content로 합친다.
+ *
+ * 텍스트만 있으면 파트 배열이 아니라 문자열 하나로 보낸다. Ollama의 OpenAI 호환
+ * 엔드포인트는 내용이 커지면 여러 개로 나뉜 텍스트 파트를 통째로 버린다 — 실측:
+ * 40,650자 첨부를 파트 두 개로 보내면 서버가 받은 프롬프트가 19토큰이었고
+ * (모델은 "첨부파일이 없습니다"라고 답한다), 같은 내용을 문자열 하나로 보내면
+ * 4,098토큰으로 정상 처리됐다. 이미지·PDF가 섞였을 때만 배열을 유지한다.
+ */
+export function buildUserContent(parts: UserPart[], userText: string): string | UserPart[] {
+  const all: UserPart[] = [...parts, { type: 'text', text: userText }]
+  if (all.every((p) => p.type === 'text')) {
+    return all.map((p) => (p as { text: string }).text).join('\n\n')
+  }
+  // 비텍스트 파트는 그대로 두고, 연속된 텍스트만 하나로 접는다
+  const merged: UserPart[] = []
+  for (const part of all) {
+    const prev = merged[merged.length - 1]
+    if (part.type === 'text' && prev?.type === 'text') prev.text += `\n\n${part.text}`
+    else merged.push(part.type === 'text' ? { ...part } : part)
+  }
+  return merged
+}
+
+/**
  * 첨부를 모델이 이해할 수 있는 메시지 파트로 변환한다.
  * 이미지/PDF는 멀티모달 파트로 그대로, docx·텍스트류는 본문을 추출해 텍스트로 인라인.
  */
