@@ -164,6 +164,21 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     writeFileSync(filePath, body, 'utf-8')
     return filePath
   })
+  // 분할 처리 결과처럼 대화에 담기엔 큰 산출물을 사용자가 파일로 가져갈 수 있게 한다
+  ipcMain.handle('task:saveResult', async (_e, title: string, text: string) => {
+    const safe = title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 60).trim() || 'result'
+    const { canceled, filePath } = await dialog.showSaveDialog(getWin(), {
+      title: '작업 결과 저장',
+      defaultPath: `${safe}.md`,
+      filters: [
+        { name: 'Markdown', extensions: ['md'] },
+        { name: '텍스트', extensions: ['txt'] }
+      ]
+    })
+    if (canceled || !filePath) return null
+    writeFileSync(filePath, text, 'utf-8')
+    return filePath
+  })
   ipcMain.handle('memory:import', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog(getWin(), {
       title: '지식베이스 가져오기',

@@ -113,6 +113,8 @@ const api: DesktopAgentApi = {
     ipcRenderer.invoke('memory:export', format),
   importMemories: (): Promise<{ added: number; skipped: number; error?: string } | null> =>
     ipcRenderer.invoke('memory:import'),
+  saveTaskResult: (title: string, text: string): Promise<string | null> =>
+    ipcRenderer.invoke('task:saveResult', title, text),
 
   netConfig: (): Promise<NetworkConfig> => ipcRenderer.invoke('net:config'),
   netSaveConfig: (patch: Partial<NetworkConfig>): Promise<NetworkConfig> =>

@@ -116,7 +116,10 @@ export function startDocumentTask(
         'done',
         result.text,
         `"${doc.name}"을(를) ${result.chunks}개 조각으로 나눠 처리하고 결과를 하나로 합쳤다 ` +
-          `(결과 약 ${estimateTokens(result.text).toLocaleString()}토큰).`
+          `(결과 약 ${estimateTokens(result.text).toLocaleString()}토큰).` +
+          (result.unchanged > 0
+            ? ` 다만 ${result.unchanged}개 조각은 재시도 후에도 원문이 그대로 남았다 — 그 부분이 처리되지 않았음을 사용자에게 알려라.`
+            : '')
       )
     } catch (e) {
       if (abort.signal.aborted) finishTask(win, info, 'cancelled', '사용자 요청으로 취소되었습니다.')

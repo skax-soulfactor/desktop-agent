@@ -114,9 +114,47 @@ export interface DocumentJobHooks {
 export interface DocumentJobResult {
   text: string
   chunks: number
+  /** 재시도 후에도 원문 그대로였던 조각 수 — 결과가 부분적으로만 처리됐음을 알리는 데 쓴다 */
+  unchanged: number
   inputTokens: number
   outputTokens: number
 }
+
+/** 코드 블록은 원문 유지가 정답이므로 변환 여부 판정에서 제외한다 */
+function proseOnly(s: string): string {
+  return s
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`\n]*`/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * 모델이 지시를 적용하지 않고 원문을 그대로 돌려줬는지 판단한다.
+ *
+ * 실측: 디렉토리 트리처럼 99%가 코드 블록인 조각은 원문 그대로가 정답이라 단순 비교로는
+ * 오탐이 난다. 그래서 코드 블록 밖의 산문만 비교한다. 산문이 없는 조각은 실패가 아니다.
+ * 지시를 시스템 프롬프트 앞에 두는 것으로 대부분 해결되지만, 남는 경우를 위한 안전망이다.
+ */
+export function looksUnchanged(source: string, output: string): boolean {
+  if (!output.trim()) return true
+  const a = proseOnly(source)
+  const b = proseOnly(output)
+  if (!a) return false // 코드뿐인 조각 — 바꿀 산문이 없다
+  if (!b) return true
+  if (a === b) return true
+  // 길이가 비슷한데 앞부분이 길게 일치하면 사실상 복사본이다
+  const ratio = b.length / a.length
+  if (ratio < 0.6 || ratio > 1.6) return false
+  const n = Math.min(a.length, b.length)
+  let same = 0
+  while (same < n && a[same] === b[same]) same++
+  return same >= Math.min(200, n * 0.5)
+}
+
+const RETRY_HINT =
+  '\n\n중요: 직전 시도에서 원문을 그대로 복사해 돌려주는 실패가 있었다. ' +
+  '이번에는 반드시 지시를 적용한 결과를 내라. 코드 블록 안을 제외한 모든 문장이 바뀌어야 한다.'
 
 /**
  * 문서를 조각으로 나눠 지시를 적용하고 결과를 합친다.
@@ -137,21 +175,34 @@ export async function runDocumentJob(
 
   let inputTokens = 0
   let outputTokens = 0
+  let unchanged = 0
   const parts: string[] = []
 
-  for (let i = 0; i < chunks.length; i++) {
-    if (hooks.signal.aborted) throw new Error('사용자가 중지했습니다.')
-    hooks.onProgress(i, chunks.length)
+  const runChunk = async (chunk: string, i: number, hint: string): Promise<string> => {
     const { text, usage } = await completeText({
       model,
-      system: TRANSFORM_PROMPT,
-      prompt: `## 지시\n${instruction}\n\n## 조각 ${i + 1}/${chunks.length}\n${chunks[i]}`,
+      // 지시를 시스템 프롬프트 맨 앞에도 둔다 — 규칙 목록에 묻히면 모델이 원문을 그대로 뱉는다
+      system: `${instruction}\n\n${TRANSFORM_PROMPT}${hint}`,
+      prompt: `## 지시\n${instruction}\n\n## 조각 ${i + 1}/${chunks.length}\n${chunk}`,
       ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
       ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {})
     })
     inputTokens += usage.inputTokens ?? 0
     outputTokens += usage.outputTokens ?? 0
-    parts.push(text.trim())
+    return text.trim()
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (hooks.signal.aborted) throw new Error('사용자가 중지했습니다.')
+    hooks.onProgress(i, chunks.length)
+    let out = await runChunk(chunks[i], i, '')
+    if (looksUnchanged(chunks[i], out)) {
+      const retry = await runChunk(chunks[i], i, RETRY_HINT)
+      // 재시도가 실패하면 첫 결과를 쓴다 — 코드 블록뿐인 조각은 원문 그대로가 정답이다
+      if (looksUnchanged(chunks[i], retry)) unchanged++
+      else out = retry
+    }
+    parts.push(out)
   }
   hooks.onProgress(chunks.length, chunks.length)
 
@@ -161,7 +212,7 @@ export async function runDocumentJob(
   )
 
   if (mode === 'transform' || parts.length === 1) {
-    return { text: parts.join('\n\n'), chunks: chunks.length, inputTokens, outputTokens }
+    return { text: parts.join('\n\n'), chunks: chunks.length, unchanged, inputTokens, outputTokens }
   }
 
   // 요약·분석은 부분 결과를 다시 합친다. 합칠 것들이 또 창을 넘으면 단계적으로 줄인다.
@@ -183,10 +234,10 @@ export async function runDocumentJob(
       next.push(text.trim())
     }
     // 한 단계에서 줄지 않으면 무한 루프가 되므로 멈춘다
-    if (next.length >= pending.length) return { text: next.join('\n\n'), chunks: chunks.length, inputTokens, outputTokens }
+    if (next.length >= pending.length) return { text: next.join('\n\n'), chunks: chunks.length, unchanged, inputTokens, outputTokens }
     pending = next
   }
-  return { text: pending[0] ?? '', chunks: chunks.length, inputTokens, outputTokens }
+  return { text: pending[0] ?? '', chunks: chunks.length, unchanged, inputTokens, outputTokens }
 }
 
 /** 메인 에이전트에게 노출되는 문서 처리 도구 */

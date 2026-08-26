@@ -97,6 +97,9 @@ export interface DesktopAgentApi {
   exportMemories(format: 'json' | 'md'): Promise<string | null>
   importMemories(): Promise<{ added: number; skipped: number; error?: string } | null>
 
+  /** 작업 결과(문서 분할 처리 결과 등)를 파일로 저장. 저장 경로 또는 취소 시 null */
+  saveTaskResult(title: string, text: string): Promise<string | null>
+
   // 에이전트 네트워크
   netConfig(): Promise<NetworkConfig>
   netSaveConfig(patch: Partial<NetworkConfig>): Promise<NetworkConfig>
