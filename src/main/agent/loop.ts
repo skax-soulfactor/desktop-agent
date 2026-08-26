@@ -3,7 +3,8 @@ import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
 import { buildAttachmentParts, buildUserContent } from './attachments'
-import { resolveModelFor } from '../llm/providers'
+import { documentTools } from './documents'
+import { resolveModelFor, type ResolvedModel } from '../llm/providers'
 import { estimateTokens, fitToTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, PURPOSE_DESCRIPTION, type TurnContext } from '../tools'
@@ -11,7 +12,7 @@ import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
 import { getSession, saveSession, appendToSession, addSessionUsage } from './sessions'
 import { recordUsage } from '../usage/store'
-import { taskTools, listTasks } from './tasks'
+import { taskTools, listTasks, startDocumentTask } from './tasks'
 import { scheduleTools } from './scheduler'
 import { memoryTools } from '../memory/tools'
 import { peerTools, buildPeerContext } from '../network/peerTools'
@@ -67,6 +68,8 @@ function compactSystemPrompt(): string[] {
     '- 결론부터 답하라. "확인 중입니다", "잠시만요"만 남기고 턴을 끝내지 마라.',
     '- 사용자가 준 텍스트를 되풀이하지 마라. 번역·요약·교정 요청이면 결과물만 내라 — 원문을 다시 인용하면 정작 결과가 잘린다.',
     '- 첨부(문서 본문·이미지·PDF)는 메시지 안에 이미 들어 있다. 직접 읽고 처리하라. 파일을 다시 달라고 하지 마라.',
+    '- 단 "documentId"가 붙은 첨부는 네 창보다 커서 미리보기만 실려 있다. 그 문서 전체를 대상으로 하는',
+    '  번역·요약·분석은 미리보기로 답하지 말고 process_document로 처리하라. 분할·병합은 앱이 한다.',
     '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
     '- 파일 읽기·목록 확인·상태 조회는 fs_read/fs_list/shell_exec로 직접 실행하고 그 자리에서 답하라.',
     '  "실행해도 될까요?"라고 되묻지 마라 — 승인 창은 앱이 자동으로 띄운다.',
@@ -270,6 +273,7 @@ function summarizeCall(toolName: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>
   if (toolName === 'delegate_task') return `작업 위임: ${String(i.title ?? '')}`
   if (toolName === 'cancel_task') return `작업 취소 요청: ${String(i.taskId ?? '')}`
+  if (toolName === 'process_document') return `문서 분할 처리: ${String(i.instruction ?? '').slice(0, 40)}`
   if (toolName === 'list_tasks') return '작업 목록 조회'
   if (toolName === 'save_memory') return `기억 저장: ${String(i.title ?? '')}`
   if (toolName === 'schedule_task') return `스케줄 등록: ${String(i.title ?? '')}`
@@ -305,7 +309,21 @@ export async function runTurn(
   activeTurns.set(sessionId, abort)
 
   const ctx: TurnContext = { sessionId, win, failures: [] }
-  const { parts, metas } = await buildAttachmentParts(attachments)
+
+  // 첨부를 만들기 전에 모델을 확정한다 — 창보다 큰 첨부는 인라인 대신 문서로 보관해야 하고,
+  // 그 판단에 예산이 필요하다. 프로바이더 설정 오류는 사용자 메시지를 저장한 뒤에 알린다.
+  let resolved: ResolvedModel | null = null
+  let resolveError: unknown = null
+  try {
+    resolved = await resolveModelFor('standard')
+  } catch (e) {
+    resolveError = e
+  }
+  const inlineTokenBudget = resolved?.profile.local
+    ? Math.max(256, Math.floor(resolved.profile.promptBudget * 0.35))
+    : undefined
+
+  const { parts, metas } = await buildAttachmentParts(attachments, { sessionId, inlineTokenBudget })
   const attachNote = metas.length > 0 ? ` [첨부: ${metas.map((m) => m.name).join(', ')}]` : ''
 
   // 사용자 메시지를 먼저 저장하고, 이후에는 append만 한다
@@ -345,8 +363,9 @@ export async function runTurn(
   }
 
   try {
-    // 대화는 도구 호출 품질이 중요하므로 '일반' 등급 사용
-    const { model, config, profile } = await resolveModelFor('standard')
+    // 대화는 도구 호출 품질이 중요하므로 '일반' 등급 사용 (첨부 처리를 위해 위에서 미리 확정)
+    if (!resolved) throw resolveError ?? new Error('LLM 프로바이더를 확인할 수 없습니다.')
+    const { model, config, profile } = resolved
     ctx.resultChars = profile.toolResultChars
 
     const tools = {
@@ -355,7 +374,10 @@ export async function runTurn(
       ...scheduleTools(sessionId),
       ...memoryTools(win, sessionId),
       ...peerTools(),
-      ...integrationTools(win, sessionId)
+      ...integrationTools(win, sessionId),
+      ...documentTools(sessionId, (documentId, instruction, mode) =>
+        startDocumentTask(win, sessionId, documentId, instruction, mode)
+      )
     }
     const toolTokens = estimateToolTokens(tools)
 

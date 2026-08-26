@@ -14,6 +14,7 @@ import { notifyIfBackground } from '../notify'
 import { clarifyTool } from './clarify'
 import { integrationTools } from '../integrations/tools'
 import { mcpToolsFor } from '../mcp/manager'
+import { getDocument, runDocumentJob } from './documents'
 
 interface Task {
   info: TaskInfo
@@ -69,6 +70,60 @@ export function startTask(
   tasks.set(info.id, { info, abort: new AbortController() })
   emit(win, info)
   void runTask(win, info.id, instruction)
+  return { ...info }
+}
+
+/**
+ * 창보다 큰 문서를 조각으로 나눠 처리하는 작업. 워커(에이전트 루프)와 달리 도구를 쓰지 않는
+ * 결정적 파이프라인이라, 진행 상황이 "몇 번째 조각"으로 정확히 드러난다.
+ */
+export function startDocumentTask(
+  win: BrowserWindow,
+  sessionId: string,
+  documentId: string,
+  instruction: string,
+  mode: 'transform' | 'reduce'
+): TaskInfo {
+  const doc = getDocument(documentId)
+  if (!doc) throw new Error(`documentId ${documentId}에 해당하는 문서가 없습니다.`)
+
+  const info: TaskInfo = {
+    id: crypto.randomUUID(),
+    sessionId,
+    title: `${doc.name} — ${instruction.slice(0, 40)}`,
+    status: 'running',
+    tier: 'standard',
+    createdAt: new Date().toISOString()
+  }
+  const abort = new AbortController()
+  tasks.set(info.id, { info, abort })
+  emit(win, info)
+
+  void (async () => {
+    try {
+      const result = await runDocumentJob(sessionId, doc, instruction, mode, {
+        signal: abort.signal,
+        onProgress: (done, total) => {
+          info.detail = `${done}/${total} 조각 처리`
+          emit(win, info)
+        }
+      })
+      info.usage = { input: result.inputTokens, output: result.outputTokens }
+      addSessionUsage(sessionId, result.inputTokens, result.outputTokens)
+      finishTask(
+        win,
+        info,
+        'done',
+        result.text,
+        `"${doc.name}"을(를) ${result.chunks}개 조각으로 나눠 처리하고 결과를 하나로 합쳤다 ` +
+          `(결과 약 ${estimateTokens(result.text).toLocaleString()}토큰).`
+      )
+    } catch (e) {
+      if (abort.signal.aborted) finishTask(win, info, 'cancelled', '사용자 요청으로 취소되었습니다.')
+      else finishTask(win, info, 'failed', describeError(e))
+    }
+  })()
+
   return { ...info }
 }
 
@@ -269,10 +324,21 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   cancelled: '취소됨'
 }
 
-function finishTask(win: BrowserWindow, info: TaskInfo, status: TaskStatus, result: string): void {
+/**
+ * @param historyNote 메인 에이전트 히스토리에 넣을 대체 문구. 결과 본문이 창을 넘길 만큼
+ *   클 때(문서 분할 처리 결과 등) 카드에는 전문을 남기고 모델에게는 이 요약만 전달한다.
+ */
+function finishTask(
+  win: BrowserWindow,
+  info: TaskInfo,
+  status: TaskStatus,
+  result: string,
+  historyNote?: string
+): void {
   info.status = status
-  // 메인 에이전트가 이 본문만 보고 사용자에게 답하므로, 결론이 잘려나가지 않을 만큼 넉넉히 남긴다
-  info.result = result.slice(0, 6000)
+  // 메인 에이전트가 이 본문만 보고 사용자에게 답하므로, 결론이 잘려나가지 않을 만큼 넉넉히 남긴다.
+  // 단 historyNote가 있으면 카드용 전문은 그대로 두고 모델에게만 요약을 준다.
+  info.result = historyNote ? result : result.slice(0, 6000)
   info.detail = undefined
   info.finishedAt = new Date().toISOString()
   emit(win, info)
@@ -302,12 +368,16 @@ function finishTask(win: BrowserWindow, info: TaskInfo, status: TaskStatus, resu
     [
       {
         role: 'user',
-        content:
-          `[작업 알림 — 시스템 자동 메시지] 백그라운드 작업 "${info.title}" ${STATUS_LABEL[status]}.\n` +
-          `결과 전문:\n${info.result}\n\n` +
-          '(원문 카드는 사용자 화면에 이미 표시되었다. 원문을 되풀이하지 말고, ' +
-          '이 결과가 사용자의 원래 질문에 대해 무엇을 뜻하는지 해석해서 답하라. ' +
-          '앞선 작업 결과와 모순되면 모순을 짚고 어느 쪽이 맞는지 직접 확인한 뒤 답하라.)'
+        content: historyNote
+          ? `[작업 알림 — 시스템 자동 메시지] 백그라운드 작업 "${info.title}" ${STATUS_LABEL[status]}.\n` +
+            `${historyNote}\n\n` +
+            '(결과 전문은 사용자 화면의 카드에 이미 표시되었다. 전문을 다시 출력하려 하지 마라 — ' +
+            '네 컨텍스트에 담기지 않는다. 무엇을 했는지 한두 문장으로만 알려라.)'
+          : `[작업 알림 — 시스템 자동 메시지] 백그라운드 작업 "${info.title}" ${STATUS_LABEL[status]}.\n` +
+            `결과 전문:\n${info.result}\n\n` +
+            '(원문 카드는 사용자 화면에 이미 표시되었다. 원문을 되풀이하지 말고, ' +
+            '이 결과가 사용자의 원래 질문에 대해 무엇을 뜻하는지 해석해서 답하라. ' +
+            '앞선 작업 결과와 모순되면 모순을 짚고 어느 쪽이 맞는지 직접 확인한 뒤 답하라.)'
       }
     ]
   )
