@@ -6,6 +6,7 @@ import { fsRead, fsWrite, fsList } from './fs'
 import { shellExec } from './shell'
 import { httpRequest } from './http'
 import { checkPermission } from '../permissions/gateway'
+import { registerDocument } from '../agent/documents'
 import type { FailureSignal } from '../memory/extract'
 
 export const allToolDefs: DesktopToolDef[] = [fsRead, fsWrite, fsList, shellExec, httpRequest]
@@ -24,6 +25,40 @@ export interface TurnContext {
    * 로컬 모델에서는 결과 한 건이 대화 전체를 창 밖으로 밀어낸다.
    */
   resultChars?: number
+}
+
+/**
+ * 예산을 넘는 문자열은 자르지 않고 문서로 보관한 뒤 손잡이만 돌려준다.
+ *
+ * 잘라 버리면 뒷부분은 존재조차 알 수 없다. 문서로 두면 에이전트가 process_document로
+ * 나눠서 처리할 수 있다 — 큰 파일을 fs_read로 읽거나 긴 셸 출력을 받은 경우에도
+ * 첨부와 똑같이 다룰 수 있어야 한다.
+ */
+function offloadLargeText(
+  value: unknown,
+  maxChars: number,
+  ctx: TurnContext,
+  label: string
+): unknown {
+  if (typeof value === 'string' && value.length > maxChars) {
+    const doc = registerDocument(ctx.sessionId, label, value)
+    return {
+      documentId: doc.id,
+      tokens: doc.tokens,
+      note:
+        `결과가 커서 전문은 보관되었고 아래는 앞부분이다. 전체를 대상으로 하는 작업(번역·요약·분석·추출)은 ` +
+        `preview로 답하지 말고 process_document(documentId="${doc.id}", ...)로 처리하라.`,
+      preview: value.slice(0, Math.max(200, Math.floor(maxChars * 0.4)))
+    }
+  }
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = offloadLargeText(v, maxChars, ctx, `${label} — ${k}`)
+    }
+    return out
+  }
+  return value
 }
 
 /**
@@ -112,7 +147,9 @@ export function buildTools(ctx: TurnContext, only?: string[]): ToolSet {
         }
         try {
           const result = await def.execute(input)
-          return ctx.resultChars ? capOutput(result, ctx.resultChars) : result
+          if (!ctx.resultChars) return result
+          // 먼저 큰 텍스트를 문서로 빼내고, 그래도 남는 부분만 줄인다
+          return capOutput(offloadLargeText(result, ctx.resultChars, ctx, summary), ctx.resultChars)
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
           ctx.failures.push({ kind: 'tool-error', detail: `${summary} — ${msg}` })

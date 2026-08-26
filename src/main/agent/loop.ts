@@ -2,16 +2,18 @@ import { streamText, stepCountIs, type ToolSet } from 'ai'
 import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
-import { buildAttachmentParts } from './attachments'
-import { resolveModelFor } from '../llm/providers'
-import { estimateTokens, type ModelProfile } from '../llm/profile'
+import { buildAttachmentParts, buildUserContent } from './attachments'
+import { documentTools, registerDocument } from './documents'
+import { buildSkillContext } from '../skills/store'
+import { resolveModelFor, type ResolvedModel } from '../llm/providers'
+import { estimateTokens, fitToTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, PURPOSE_DESCRIPTION, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
 import { getSession, saveSession, appendToSession, addSessionUsage } from './sessions'
 import { recordUsage } from '../usage/store'
-import { taskTools, listTasks } from './tasks'
+import { taskTools, listTasks, startDocumentTask } from './tasks'
 import { scheduleTools } from './scheduler'
 import { memoryTools } from '../memory/tools'
 import { peerTools, buildPeerContext } from '../network/peerTools'
@@ -66,6 +68,10 @@ function compactSystemPrompt(): string[] {
     '## 규칙',
     '- 결론부터 답하라. "확인 중입니다", "잠시만요"만 남기고 턴을 끝내지 마라.',
     '- 사용자가 준 텍스트를 되풀이하지 마라. 번역·요약·교정 요청이면 결과물만 내라 — 원문을 다시 인용하면 정작 결과가 잘린다.',
+    '- 첨부(문서 본문·이미지·PDF)는 메시지 안에 이미 들어 있다. 직접 읽고 처리하라. 파일을 다시 달라고 하지 마라.',
+    '- "documentId"가 붙어 오는 것(첨부, 큰 파일 읽기 결과, 긴 셸 출력)은 네 창보다 커서 미리보기만 실린 것이다.',
+    '  그 전체를 대상으로 하는 작업(번역·요약·분석·추출)은 미리보기로 답하지 말고 process_document를 호출하라.',
+    '  분할·처리·병합은 앱이 알아서 한다. 네가 조각을 나누거나 "앞부분만 했다"고 답할 필요 없다.',
     '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
     '- 파일 읽기·목록 확인·상태 조회는 fs_read/fs_list/shell_exec로 직접 실행하고 그 자리에서 답하라.',
     '  "실행해도 될까요?"라고 되묻지 마라 — 승인 창은 앱이 자동으로 띄운다.',
@@ -143,6 +149,9 @@ function fullSystemPrompt(): string[] {
 function baseSystemPrompt(sessionId: string, profile: ModelProfile): string {
   const lines = profile.local ? compactSystemPrompt() : fullSystemPrompt()
 
+  const skillCtx = buildSkillContext()
+  if (skillCtx) lines.push('', skillCtx)
+
   const peerCtx = buildPeerContext()
   if (peerCtx) lines.push('', peerCtx)
 
@@ -179,8 +188,7 @@ function estimateToolTokens(tools: ToolSet): number {
  * 모델은 아무것도 답할 수 없다. 앞쪽이 도구 결과로 시작하면 짝이 되는 호출이 잘려나간
  * 것이므로 함께 버린다.
  */
-function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: number): T[] {
-  if (messages.length <= 1) return messages
+function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: number, sessionId: string): T[] {
   const cost = (m: T): number => estimateTokens(JSON.stringify(m))
 
   const kept: T[] = []
@@ -194,7 +202,62 @@ function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: nu
   }
   // 잘린 지점이 도구 결과 한가운데면 그 앞의 assistant까지 함께 버린다
   while (kept.length > 1 && kept[0].role === 'tool') kept.shift()
+
+  // 메시지 하나만 남았는데 그것도 예산을 넘으면(대용량 첨부·긴 붙여넣기) 본문을 줄인다
+  const last = kept[kept.length - 1]
+  if (kept.length === 1 && last && cost(last) > budgetTokens) {
+    kept[0] = fitMessage(last, budgetTokens, sessionId)
+  }
   return kept
+}
+
+/**
+ * 메시지 하나가 예산을 통째로 넘길 때 그 안의 텍스트를 줄인다.
+ *
+ * 그냥 보내면 서버가 알아서 처리하는데, 그 결과가 예측 불가능하다 — Ollama는 큰 내용을
+ * 잘라 주기도 하고 통째로 버리기도 한다(그러면 모델이 "첨부파일이 없습니다"라고 답한다).
+ * 여기서 직접 자르고 잘렸다고 적어 두면, 적어도 앞부분은 확실히 전달되고 모델이
+ * 일부만 봤다는 사실을 사용자에게 알릴 수 있다.
+ */
+function fitMessage<T extends { role: string }>(
+  message: T,
+  budgetTokens: number,
+  sessionId: string
+): T {
+  const { content } = message as { content?: unknown }
+
+  // 잘린 뒷부분도 문서로 남긴다 — 그래야 "앞부분만 했다"로 끝나지 않고
+  // 에이전트가 process_document로 전체를 나눠 처리할 수 있다
+  const noteFor = (full: string): string => {
+    const doc = registerDocument(sessionId, '대화에 붙여넣은 긴 텍스트', full)
+    return (
+      `\n\n...[길어서 여기까지만 전달되었다. 전문은 documentId="${doc.id}"(약 ${doc.tokens.toLocaleString()}토큰)로 보관되어 있다. ` +
+      '전체를 대상으로 하는 작업이면 process_document로 나눠 처리하고, 앞부분만으로 충분한 질문이면 그대로 답하라.]'
+    )
+  }
+
+  if (typeof content === 'string') {
+    const NOTE = noteFor(content)
+    const room = Math.max(256, budgetTokens - estimateTokens(NOTE))
+    return { ...message, content: fitToTokens(content, room) + NOTE }
+  }
+
+  const NOTE = '\n\n...[길어서 여기까지만 전달되었다. 받은 부분까지 처리하고 잘렸다는 사실을 알려라.]'
+  const room = Math.max(256, budgetTokens - estimateTokens(NOTE))
+  if (Array.isArray(content)) {
+    // 이미지·PDF 파트는 자를 수 없으니 텍스트 파트만 줄인다
+    const texts = content.filter((p: unknown) => (p as { type?: string }).type === 'text')
+    if (texts.length === 0) return message
+    const share = Math.max(256, Math.floor(room / texts.length))
+    const next = content.map((p: unknown) => {
+      const part = p as { type?: string; text?: string }
+      if (part.type !== 'text' || typeof part.text !== 'string') return p
+      if (estimateTokens(part.text) <= share) return p
+      return { ...part, text: fitToTokens(part.text, share) + NOTE }
+    })
+    return { ...message, content: next }
+  }
+  return message
 }
 
 /**
@@ -229,6 +292,7 @@ function summarizeCall(toolName: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>
   if (toolName === 'delegate_task') return `작업 위임: ${String(i.title ?? '')}`
   if (toolName === 'cancel_task') return `작업 취소 요청: ${String(i.taskId ?? '')}`
+  if (toolName === 'process_document') return `문서 분할 처리: ${String(i.instruction ?? '').slice(0, 40)}`
   if (toolName === 'list_tasks') return '작업 목록 조회'
   if (toolName === 'save_memory') return `기억 저장: ${String(i.title ?? '')}`
   if (toolName === 'schedule_task') return `스케줄 등록: ${String(i.title ?? '')}`
@@ -264,7 +328,21 @@ export async function runTurn(
   activeTurns.set(sessionId, abort)
 
   const ctx: TurnContext = { sessionId, win, failures: [] }
-  const { parts, metas } = await buildAttachmentParts(attachments)
+
+  // 첨부를 만들기 전에 모델을 확정한다 — 창보다 큰 첨부는 인라인 대신 문서로 보관해야 하고,
+  // 그 판단에 예산이 필요하다. 프로바이더 설정 오류는 사용자 메시지를 저장한 뒤에 알린다.
+  let resolved: ResolvedModel | null = null
+  let resolveError: unknown = null
+  try {
+    resolved = await resolveModelFor('standard')
+  } catch (e) {
+    resolveError = e
+  }
+  const inlineTokenBudget = resolved?.profile.local
+    ? Math.max(256, Math.floor(resolved.profile.promptBudget * 0.35))
+    : undefined
+
+  const { parts, metas } = await buildAttachmentParts(attachments, { sessionId, inlineTokenBudget })
   const attachNote = metas.length > 0 ? ` [첨부: ${metas.map((m) => m.name).join(', ')}]` : ''
 
   // 사용자 메시지를 먼저 저장하고, 이후에는 append만 한다
@@ -277,7 +355,7 @@ export async function runTurn(
   })
   session.messages.push({
     role: 'user',
-    content: parts.length > 0 ? [...parts, { type: 'text', text: userText }] : userText
+    content: parts.length > 0 ? buildUserContent(parts, userText) : userText
   })
   if (!session.meta.titlePinned && session.meta.title === '새 대화') {
     session.meta.title = userText.slice(0, 40)
@@ -304,8 +382,9 @@ export async function runTurn(
   }
 
   try {
-    // 대화는 도구 호출 품질이 중요하므로 '일반' 등급 사용
-    const { model, config, profile } = await resolveModelFor('standard')
+    // 대화는 도구 호출 품질이 중요하므로 '일반' 등급 사용 (첨부 처리를 위해 위에서 미리 확정)
+    if (!resolved) throw resolveError ?? new Error('LLM 프로바이더를 확인할 수 없습니다.')
+    const { model, config, profile } = resolved
     ctx.resultChars = profile.toolResultChars
 
     const tools = {
@@ -314,7 +393,10 @@ export async function runTurn(
       ...scheduleTools(sessionId),
       ...memoryTools(win, sessionId),
       ...peerTools(),
-      ...integrationTools(win, sessionId)
+      ...integrationTools(win, sessionId),
+      ...documentTools(sessionId, (documentId, instruction, mode) =>
+        startDocumentTask(win, sessionId, documentId, instruction, mode)
+      )
     }
     const toolTokens = estimateToolTokens(tools)
 
@@ -331,7 +413,7 @@ export async function runTurn(
 
     // 남은 예산만큼만 과거 대화를 싣는다 — 넘기면 서버가 앞부분을 조용히 잘라낸다
     const historyBudget = profile.promptBudget - estimateTokens(system) - toolTokens
-    const messages = trimHistory(messagesForModel, historyBudget)
+    const messages = trimHistory(messagesForModel, historyBudget, sessionId)
 
     // 조용히 잘려 이상한 답이 나오는 것보다, 무엇을 바꿔야 하는지 알리는 편이 낫다.
     const warning = contextWarning(profile, historyBudget)

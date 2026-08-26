@@ -3,6 +3,7 @@ import type {
   AgentCard,
   ApprovalDecision,
   ApprovalRequest,
+  Skill,
   AttachmentPayload,
   AuditRecord,
   ChatEvent,
@@ -113,6 +114,14 @@ const api: DesktopAgentApi = {
     ipcRenderer.invoke('memory:export', format),
   importMemories: (): Promise<{ added: number; skipped: number; error?: string } | null> =>
     ipcRenderer.invoke('memory:import'),
+  saveTaskResult: (title: string, text: string): Promise<string | null> =>
+    ipcRenderer.invoke('task:saveResult', title, text),
+
+  listSkills: (includeArchived?: boolean): Promise<Skill[]> =>
+    ipcRenderer.invoke('skill:list', includeArchived),
+  saveSkill: (skill: Partial<Skill> & Pick<Skill, 'name' | 'instruction' | 'mode'>): Promise<Skill> =>
+    ipcRenderer.invoke('skill:save', skill),
+  deleteSkill: (id: string): Promise<boolean> => ipcRenderer.invoke('skill:delete', id),
 
   netConfig: (): Promise<NetworkConfig> => ipcRenderer.invoke('net:config'),
   netSaveConfig: (patch: Partial<NetworkConfig>): Promise<NetworkConfig> =>

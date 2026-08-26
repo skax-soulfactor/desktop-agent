@@ -201,6 +201,8 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
   /** 방금 복사한 메시지 인덱스 (버튼 피드백용) */
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [savedTaskId, setSavedTaskId] = useState<string | null>(null)
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 다음 전송에 인용으로 첨부할 선택 텍스트 */
   const [quote, setQuote] = useState<string | null>(null)
   /** 대화 기록 검색어 — 입력 중이면 사이드바가 검색 결과 모드로 전환된다 */
@@ -229,6 +231,15 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
     setCopiedIdx(idx)
     if (copiedTimer.current) clearTimeout(copiedTimer.current)
     copiedTimer.current = setTimeout(() => setCopiedIdx(null), 1500)
+  }
+
+  /** 분할 처리 결과처럼 긴 산출물을 파일로 내보낸다 (저장 위치는 네이티브 대화상자에서 고른다) */
+  const saveResult = async (title: string, text: string, taskId: string): Promise<void> => {
+    const path = await window.api.saveTaskResult(title, text)
+    if (!path) return
+    setSavedTaskId(taskId)
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+    savedTimer.current = setTimeout(() => setSavedTaskId(null), 2000)
   }
 
   const onMessagesMouseUp = (): void => {
@@ -865,6 +876,13 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
                           onClick={() => copyMessage(it.result!, i)}
                         >
                           {copiedIdx === i ? '복사됨 ✓' : '복사'}
+                        </button>
+                        <button
+                          className="copy"
+                          title="결과를 마크다운 파일로 저장"
+                          onClick={() => void saveResult(it.title, it.result!, it.taskId)}
+                        >
+                          {savedTaskId === it.taskId ? '저장됨 ✓' : '파일로 저장'}
                         </button>
                       </div>
                     </div>
