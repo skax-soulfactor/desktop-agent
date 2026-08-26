@@ -7,7 +7,7 @@ import type { LanguageModel } from 'ai'
 import type { ModelTier, ProviderConfig, TierAssignment } from '@shared/types'
 import { readJson, writeJson } from '../storage/jsonStore'
 import { enterpriseFetch } from '../tls'
-import { isLocalProvider, profileFor, type ModelProfile } from './profile'
+import { isLocalProvider, probeServerContext, profileFor, type ModelProfile } from './profile'
 
 interface ProviderState {
   providers: ProviderConfig[]
@@ -219,6 +219,18 @@ export function getModelFor(tier: ModelTier = 'standard'): ResolvedModel {
     if (config) return { ...buildModel(config), profile: profileFor(config) }
   }
   throw new Error('설정에서 LLM 프로바이더를 등록하고 모델 역할(경량/일반/고급)을 배정하세요.')
+}
+
+/**
+ * getModelFor와 같지만, 로컬 서버에 실제로 열린 창을 확인해 예산에 반영한다.
+ * 프롬프트를 조립하는 경로(대화 턴, 워커, 배경 생성)는 이쪽을 써야 한다 —
+ * 설정값만 믿으면 서버가 더 좁을 때 응답이 잘린다.
+ */
+export async function resolveModelFor(tier: ModelTier = 'standard'): Promise<ResolvedModel> {
+  const resolved = getModelFor(tier)
+  if (!isLocalProvider(resolved.config)) return resolved
+  const serverContext = await probeServerContext(resolved.config)
+  return { ...resolved, profile: profileFor(resolved.config, serverContext) }
 }
 
 /** 하위 호환: 기본(일반) 등급 모델 */

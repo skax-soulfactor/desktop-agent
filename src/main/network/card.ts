@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { AgentCard } from '@shared/types'
 import { completeText } from '../llm/complete'
 import { estimateTokens, fitToTokens } from '../llm/profile'
-import { getModelFor } from '../llm/providers'
+import { resolveModelFor } from '../llm/providers'
 import { listMemories } from '../memory/store'
 import { getMyCard, saveMyCard, getNetworkConfig } from './store'
 import { recordUsage } from '../usage/store'
@@ -52,7 +52,7 @@ export async function regenerateCard(): Promise<AgentCard> {
   const shareable = listMemories().filter((m) => !m.tags.includes(NO_SHARE_TAG))
   const index = shareable.map((m) => `- [${m.type}] ${m.title} (${m.tags.join(', ')})`).join('\n')
 
-  const { model, config, profile } = getModelFor('light')
+  const { model, config, profile } = await resolveModelFor('light')
   const { text, usage } = await completeText({
     model,
     system: PROMPT,

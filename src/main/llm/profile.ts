@@ -1,4 +1,5 @@
 import type { ProviderConfig } from '@shared/types'
+import { enterpriseFetch } from '../tls'
 
 /**
  * 로컬(온디바이스) 모델 프로파일.
@@ -16,8 +17,12 @@ import type { ProviderConfig } from '@shared/types'
 export interface ModelProfile {
   /** 로컬 서버에서 도는 모델인가 */
   local: boolean
-  /** 이 모델이 한 요청에서 실제로 처리할 수 있는 총 토큰 */
+  /** 예산 계산에 실제로 쓰는 창 크기 — 서버 실측이 있으면 그 값이 우선한다 */
   contextTokens: number
+  /** 설정에 적힌 값 (미입력이면 기본값). 서버 실측과 어긋날 때 알리기 위해 남긴다 */
+  configuredContextTokens: number
+  /** 서버가 실제로 연 창. 확인하지 못했으면 undefined */
+  serverContextTokens?: number
   /** 프롬프트(시스템 + 기억 + 도구 스키마 + 히스토리)에 쓸 수 있는 토큰 */
   promptBudget: number
   /** 출력 상한 — 로컬 모델에서만 지정한다 */
@@ -42,15 +47,27 @@ export function isLocalProvider(config: ProviderConfig): boolean {
   return false
 }
 
-export function profileFor(config: ProviderConfig): ModelProfile {
+/**
+ * @param serverContextTokens 서버가 실제로 연 창(probeServerContext 결과).
+ *   설정값보다 이쪽이 사실이므로, 알아냈다면 그대로 쓴다 — 설정값이 더 크면
+ *   프롬프트가 서버에서 조용히 잘리고, 더 작으면 창을 놀린다.
+ */
+export function profileFor(config: ProviderConfig, serverContextTokens?: number): ModelProfile {
   const local = isLocalProvider(config)
-  const configured = config.contextTokens && config.contextTokens > 0 ? config.contextTokens : 0
-  const contextTokens = configured || (local ? DEFAULT_LOCAL_CONTEXT : DEFAULT_REMOTE_CONTEXT)
+  const configured =
+    config.contextTokens && config.contextTokens > 0
+      ? config.contextTokens
+      : local
+        ? DEFAULT_LOCAL_CONTEXT
+        : DEFAULT_REMOTE_CONTEXT
+  const contextTokens = serverContextTokens && serverContextTokens > 0 ? serverContextTokens : configured
 
   if (!local) {
     return {
       local: false,
       contextTokens,
+      configuredContextTokens: configured,
+      serverContextTokens,
       promptBudget: Math.floor(contextTokens * 0.8),
       maxSteps: 25,
       toolResultChars: 200 * 1024
@@ -62,6 +79,8 @@ export function profileFor(config: ProviderConfig): ModelProfile {
   return {
     local: true,
     contextTokens,
+    configuredContextTokens: configured,
+    serverContextTokens,
     promptBudget,
     maxOutputTokens,
     // 도구 호출 인자를 정확히 뽑는 게 문장력보다 중요하다
@@ -70,6 +89,61 @@ export function profileFor(config: ProviderConfig): ModelProfile {
     // 도구 결과 한 건이 남은 창을 통째로 먹지 않도록 예산의 일부만 허용
     toolResultChars: Math.max(1200, Math.round(promptBudget * 0.6))
   }
+}
+
+interface ContextProbe {
+  tokens?: number
+  at: number
+}
+
+const probeCache = new Map<string, ContextProbe>()
+/** 마지막으로 실제 확인된 값 — 모델이 언로드된 사이에도 이 값을 쓴다 */
+const lastKnownContext = new Map<string, number>()
+const PROBE_TTL_MS = 30_000
+/** 확인 실패는 짧게만 기억한다 (모델이 곧 다시 올라온다) */
+const PROBE_MISS_TTL_MS = 3_000
+
+/** OpenAI 호환 baseURL(.../v1)에서 Ollama 네이티브 API의 루트를 얻는다 */
+function ollamaRoot(baseURL: string): string {
+  return baseURL.trim().replace(/\/+$/, '').replace(/\/v1$/, '')
+}
+
+/**
+ * 서버가 실제로 연 창을 확인한다.
+ *
+ * 설정 화면의 값과 서버의 실제 num_ctx는 어긋나기 쉽다 — Ollama가 자동 업데이트로
+ * 재시작하면 OLLAMA_CONTEXT_LENGTH를 못 받은 채 기본 4096으로 뜨는 일이 있고,
+ * 그러면 앱은 넉넉한 줄 알고 프롬프트를 채우다 응답 자리를 남기지 못한다.
+ * `/api/ps`는 지금 올라와 있는 모델의 진짜 context_length를 알려준다.
+ *
+ * `/api/ps`는 지금 올라와 있는 모델만 보여주므로, 5분 유휴로 언로드된 사이에는 빈손으로
+ * 돌아온다. 그때는 마지막으로 확인된 값을 쓴다 — 서버를 다시 띄우지 않는 한 창 크기는
+ * 그대로이고, 설정값을 믿었다가 넘치는 것보다 이전 실측을 쓰는 편이 안전하다.
+ * 한 번도 확인하지 못했으면 undefined이고, 호출자가 설정값으로 돌아간다.
+ */
+export async function probeServerContext(config: ProviderConfig): Promise<number | undefined> {
+  if (config.type !== 'ollama') return undefined
+  const key = `${config.id}:${config.model}`
+  const cached = probeCache.get(key)
+  if (cached && Date.now() - cached.at < (cached.tokens ? PROBE_TTL_MS : PROBE_MISS_TTL_MS)) {
+    return cached.tokens ?? lastKnownContext.get(key)
+  }
+
+  let tokens: number | undefined
+  try {
+    const url = `${ollamaRoot(config.baseURL || 'http://localhost:11434/v1')}/api/ps`
+    const res = await enterpriseFetch(url, { signal: AbortSignal.timeout(1500) })
+    if (res.ok) {
+      const body = (await res.json()) as { models?: { model?: string; context_length?: number }[] }
+      const hit = body.models?.find((m) => m.model === config.model)
+      if (hit?.context_length && hit.context_length > 0) tokens = hit.context_length
+    }
+  } catch {
+    // 서버가 없거나 느리면 그냥 설정값으로 간다 — 진단 실패가 대화를 막으면 안 된다
+  }
+  probeCache.set(key, { tokens, at: Date.now() })
+  if (tokens) lastKnownContext.set(key, tokens)
+  return tokens ?? lastKnownContext.get(key)
 }
 
 /** 한글 자모·완성형과 CJK 통합 한자 — 이 구간은 문자당 토큰 비용이 ASCII의 두 배다 */

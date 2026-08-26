@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { MemoryOpSummary } from '@shared/types'
 import { completeText } from '../llm/complete'
 import { estimateTokens, fitToTokens } from '../llm/profile'
-import { getModelFor } from '../llm/providers'
+import { resolveModelFor } from '../llm/providers'
 import { createMemory, listMemories, updateMemory } from './store'
 import { recordUsage } from '../usage/store'
 
@@ -102,7 +102,7 @@ export async function extractMemories(
   failures: FailureSignal[]
 ): Promise<MemoryOpSummary[]> {
   // 배경 작업이므로 경량 등급 사용 (미배정 시 일반으로 폴백)
-  const { model, config, profile } = getModelFor('light')
+  const { model, config, profile } = await resolveModelFor('light')
   const system = profile.local ? COMPACT_EXTRACT_PROMPT : EXTRACT_PROMPT
 
   const failureText =

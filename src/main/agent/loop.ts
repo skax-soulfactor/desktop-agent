@@ -3,7 +3,7 @@ import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
 import { buildAttachmentParts } from './attachments'
-import { getModelFor } from '../llm/providers'
+import { resolveModelFor } from '../llm/providers'
 import { estimateTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, PURPOSE_DESCRIPTION, type TurnContext } from '../tools'
@@ -65,6 +65,7 @@ function compactSystemPrompt(): string[] {
     '',
     '## 규칙',
     '- 결론부터 답하라. "확인 중입니다", "잠시만요"만 남기고 턴을 끝내지 마라.',
+    '- 사용자가 준 텍스트를 되풀이하지 마라. 번역·요약·교정 요청이면 결과물만 내라 — 원문을 다시 인용하면 정작 결과가 잘린다.',
     '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
     '- 파일 읽기·목록 확인·상태 조회는 fs_read/fs_list/shell_exec로 직접 실행하고 그 자리에서 답하라.',
     '  "실행해도 될까요?"라고 되묻지 마라 — 승인 창은 앱이 자동으로 띄운다.',
@@ -86,6 +87,7 @@ function fullSystemPrompt(): string[] {
     '',
     '## 답변 규칙 (가장 중요)',
     '- 사용자가 답을 원하면 답을 줘라. "확인 중입니다", "잠시만요"만 남기고 턴을 끝내지 마라.',
+    '- 사용자가 준 텍스트를 되풀이하지 마라. 번역·요약·교정 요청이면 결과물만 내라 — 원문은 사용자가 이미 갖고 있다.',
     '- 도구를 호출하거나 작업을 위임하기 전에, 지금까지 알아낸 것과 현재 가설을 한 문단으로 먼저 말하라. 머릿속에만 두고 넘어가지 마라.',
     '- 사용자가 "그래서 결론이 뭐야"처럼 결론을 요구하면 추가 조사를 시작하지 말고 현재까지의 결론을 먼저 제시하라. 확신이 부족하면 "확인된 사실 / 추정 / 남은 확인거리"로 나눠 밝혀라.',
     '- 확인한 사실과 추정을 반드시 구분해서 말하라. 검증하지 않은 것을 "즉시 해결됩니다"처럼 단정하지 마라.',
@@ -195,6 +197,31 @@ function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: nu
   return kept
 }
 
+/**
+ * 세션당 한 번 띄울 컨텍스트 경고. 설정값과 서버 실측이 어긋난 경우를 먼저 알린다 —
+ * 그쪽이 원인이 분명하고 조치도 분명하기 때문이다.
+ */
+function contextWarning(profile: ModelProfile, historyBudget: number): string | null {
+  if (!profile.local) return null
+  const { serverContextTokens: server, configuredContextTokens: configured } = profile
+  if (server && server !== configured) {
+    return (
+      `설정에는 ${configured.toLocaleString()}토큰으로 적혀 있지만 Ollama 서버가 실제로 연 창은 ` +
+      `${server.toLocaleString()}토큰입니다. 실제 값에 맞춰 동작하지만, 두 값을 맞춰 두는 편이 좋습니다 — ` +
+      'Ollama를 완전히 종료했다가 새 터미널에서 다시 띄우면 OLLAMA_CONTEXT_LENGTH가 반영됩니다 ' +
+      '(자동 업데이트로 재시작되면 환경 변수를 놓치는 경우가 있습니다).'
+    )
+  }
+  if (historyBudget < 400) {
+    return (
+      `컨텍스트(${profile.contextTokens.toLocaleString()}토큰)가 좁아 대화 기록을 거의 싣지 못합니다. ` +
+      'Ollama라면 OLLAMA_CONTEXT_LENGTH를 올려 서버를 다시 띄우고, ' +
+      '설정 > LLM 프로바이더의 "컨텍스트"에 같은 값을 적으세요.'
+    )
+  }
+  return null
+}
+
 /** 게이트 도구는 정의에서, 작업 관리 도구는 이름별 규칙으로 요약 */
 function summarizeCall(toolName: string, input: unknown): string {
   const def = toolDefByName(toolName)
@@ -278,7 +305,7 @@ export async function runTurn(
 
   try {
     // 대화는 도구 호출 품질이 중요하므로 '일반' 등급 사용
-    const { model, config, profile } = getModelFor('standard')
+    const { model, config, profile } = await resolveModelFor('standard')
     ctx.resultChars = profile.toolResultChars
 
     const tools = {
@@ -306,16 +333,12 @@ export async function runTurn(
     const historyBudget = profile.promptBudget - estimateTokens(system) - toolTokens
     const messages = trimHistory(messagesForModel, historyBudget)
 
-    // 지시와 도구 정의만으로 창을 거의 다 쓰면 대화가 들어갈 자리가 없다.
     // 조용히 잘려 이상한 답이 나오는 것보다, 무엇을 바꿔야 하는지 알리는 편이 낫다.
-    if (profile.local && historyBudget < 400 && !contextWarned.has(sessionId)) {
+    const warning = contextWarning(profile, historyBudget)
+    if (warning && !contextWarned.has(sessionId)) {
       contextWarned.add(sessionId)
-      const text =
-        `이 모델의 컨텍스트(${profile.contextTokens.toLocaleString()}토큰)가 좁아 대화 기록을 거의 싣지 못합니다. ` +
-        'Ollama라면 OLLAMA_CONTEXT_LENGTH를 16384 이상으로 올려 서버를 다시 띄우고, ' +
-        '설정 > LLM 프로바이더의 "컨텍스트"에 같은 값을 적으세요.'
-      appendToSession(sessionId, [{ kind: 'notice', text }], [])
-      send({ type: 'notice', text })
+      appendToSession(sessionId, [{ kind: 'notice', text: warning }], [])
+      send({ type: 'notice', text: warning })
     }
 
     const result = streamText({

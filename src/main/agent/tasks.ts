@@ -3,7 +3,7 @@ import { platform, homedir } from 'os'
 import { z } from 'zod'
 import type { BrowserWindow } from 'electron'
 import type { ChatItem, ModelTier, TaskInfo, TaskStatus } from '@shared/types'
-import { getModelFor } from '../llm/providers'
+import { getModelFor, resolveModelFor } from '../llm/providers'
 import { estimateTokens } from '../llm/profile'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
@@ -133,7 +133,7 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
   let finalText = ''
 
   try {
-    const { model, config, profile } = getModelFor(info.tier ?? 'standard')
+    const { model, config, profile } = await resolveModelFor(info.tier ?? 'standard')
     ctx.resultChars = profile.toolResultChars
 
     const base = profile.local ? compactWorkerPrompt() : workerPrompt()
