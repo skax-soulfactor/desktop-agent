@@ -7,6 +7,7 @@ import type { LanguageModel } from 'ai'
 import type { ModelTier, ProviderConfig, TierAssignment } from '@shared/types'
 import { readJson, writeJson } from '../storage/jsonStore'
 import { enterpriseFetch } from '../tls'
+import { isLocalProvider, probeServerContext, profileFor, type ModelProfile } from './profile'
 
 interface ProviderState {
   providers: ProviderConfig[]
@@ -78,7 +79,8 @@ export function saveProvider(config: ProviderConfig, apiKey?: string): void {
     type: config.type,
     label: config.label,
     model: config.model,
-    baseURL: config.baseURL
+    baseURL: config.baseURL,
+    contextTokens: config.contextTokens
   }
   if (idx >= 0) state.providers[idx] = clean
   else state.providers.push(clean)
@@ -117,6 +119,49 @@ function normalizeBaseURL(url: string): string {
     .replace(/\/chat\/completions$/, '')
 }
 
+/**
+ * 로컬 서버(Ollama, LM Studio 등)의 OpenAI 호환 요청 본문에 표준 필드를 덧붙인다.
+ *
+ * - `reasoning_effort: 'none'` — qwen3 계열은 매 응답마다 <think> 블록을 먼저 생성한다.
+ *   실측: "hi" 한 마디에 출력 269토큰 → 10토큰. 좁은 컨텍스트에서는 이 사고 과정이
+ *   답을 밀어내 JSON 출력이 중간에 끊기는 원인이 된다.
+ * - `stream_options.include_usage` — 이게 없으면 스트리밍 응답에 usage가 실리지 않아
+ *   토큰 사용량이 항상 0으로 기록된다.
+ *
+ * 사고(thinking)를 지원하지 않는 모델은 reasoning_effort에 오류를 낼 수 있으므로,
+ * 그 경우 한 번만 필드를 빼고 재시도한다.
+ */
+function patchLocalBody(init: RequestInit | undefined, withReasoning: boolean): RequestInit | undefined {
+  if (!init || typeof init.body !== 'string') return init
+  let body: Record<string, unknown>
+  try {
+    const parsed: unknown = JSON.parse(init.body)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return init
+    body = { ...(parsed as Record<string, unknown>) }
+  } catch {
+    return init
+  }
+  if (withReasoning && body.reasoning_effort === undefined) body.reasoning_effort = 'none'
+  if (!withReasoning) delete body.reasoning_effort
+  if (body.stream === true && body.stream_options === undefined) {
+    body.stream_options = { include_usage: true }
+  }
+  return { ...init, body: JSON.stringify(body) }
+}
+
+async function localFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const patched = patchLocalBody(init, true)
+  const res = await enterpriseFetch(input, patched)
+  if (res.status >= 400 && patched !== init) {
+    const detail = await res.clone().text()
+    // "model does not support thinking" 류 — 사고 옵션만 빼고 한 번 더
+    if (/think|reasoning/i.test(detail)) {
+      return enterpriseFetch(input, patchLocalBody(init, false))
+    }
+  }
+  return res
+}
+
 function buildModel(config: ProviderConfig): { model: LanguageModel; config: ProviderConfig } {
   const apiKey = getKey(config.id) ?? undefined
   const fetch = enterpriseFetch
@@ -133,7 +178,7 @@ function buildModel(config: ProviderConfig): { model: LanguageModel; config: Pro
           name: 'ollama',
           baseURL: normalizeBaseURL(config.baseURL || 'http://localhost:11434/v1'),
           apiKey: apiKey ?? 'ollama',
-          fetch
+          fetch: localFetch
         }).chatModel(config.model),
         config
       }
@@ -144,7 +189,8 @@ function buildModel(config: ProviderConfig): { model: LanguageModel; config: Pro
           name: config.label,
           baseURL: normalizeBaseURL(config.baseURL),
           apiKey,
-          fetch
+          // 원격(OpenRouter 등)은 본문을 건드리지 않는다 — 프로바이더마다 해석이 달라진다
+          fetch: isLocalProvider(config) ? localFetch : fetch
         }).chatModel(config.model),
         config
       }
@@ -158,17 +204,36 @@ const FALLBACK_ORDER: Record<ModelTier, ModelTier[]> = {
   advanced: ['advanced', 'standard', 'light']
 }
 
-export function getModelFor(tier: ModelTier = 'standard'): { model: LanguageModel; config: ProviderConfig } {
+export interface ResolvedModel {
+  model: LanguageModel
+  config: ProviderConfig
+  /** 프롬프트·기억·도구 결과를 이 모델에 맞게 줄이기 위한 예산 */
+  profile: ModelProfile
+}
+
+export function getModelFor(tier: ModelTier = 'standard'): ResolvedModel {
   const state = loadState()
   for (const t of FALLBACK_ORDER[tier]) {
     const id = state.tiers[t]
     const config = state.providers.find((p) => p.id === id)
-    if (config) return buildModel(config)
+    if (config) return { ...buildModel(config), profile: profileFor(config) }
   }
   throw new Error('설정에서 LLM 프로바이더를 등록하고 모델 역할(경량/일반/고급)을 배정하세요.')
 }
 
+/**
+ * getModelFor와 같지만, 로컬 서버에 실제로 열린 창을 확인해 예산에 반영한다.
+ * 프롬프트를 조립하는 경로(대화 턴, 워커, 배경 생성)는 이쪽을 써야 한다 —
+ * 설정값만 믿으면 서버가 더 좁을 때 응답이 잘린다.
+ */
+export async function resolveModelFor(tier: ModelTier = 'standard'): Promise<ResolvedModel> {
+  const resolved = getModelFor(tier)
+  if (!isLocalProvider(resolved.config)) return resolved
+  const serverContext = await probeServerContext(resolved.config)
+  return { ...resolved, profile: profileFor(resolved.config, serverContext) }
+}
+
 /** 하위 호환: 기본(일반) 등급 모델 */
-export function getActiveModel(): { model: LanguageModel; config: ProviderConfig } {
+export function getActiveModel(): ResolvedModel {
   return getModelFor('standard')
 }

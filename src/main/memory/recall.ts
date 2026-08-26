@@ -1,4 +1,5 @@
 import type { MemoryEntry } from '@shared/types'
+import { estimateTokens } from '../llm/profile'
 import { listMemories, pinnedMemories, queryMemories, recallMemories } from './store'
 
 const TYPE_LABEL: Record<string, string> = {
@@ -18,40 +19,73 @@ export interface RecallOptions {
    * 지식베이스의 "주입 미리보기"처럼 실제 주입이 아닌 경로에서 사용한다.
    */
   dryRun?: boolean
+  /**
+   * 이 블록에 허용된 토큰. 로컬 모델처럼 창이 좁을 때 지식베이스가 시스템 프롬프트를
+   * 밀어내지 않도록, 인덱스 길이·본문 길이·주입 개수를 예산 안에서 줄인다.
+   */
+  budgetTokens?: number
 }
 
+/** 예산이 없을 때(클라우드)의 기본값 */
+const FULL_BODY_CHARS = 1500
+const FULL_RELEVANT = 5
+
 /**
- * 회상: (1) 전체 기억의 한 줄 인덱스는 항상 포함, (2) 고정 기억 전문, (3) 현재 메시지와 관련된 기억 전문 top-k 주입.
- * 토큰 예산을 넘지 않도록 본문 길이를 제한한다.
+ * 회상: (1) 전체 기억의 한 줄 인덱스, (2) 고정 기억 전문, (3) 현재 메시지와 관련된 기억 전문 top-k 주입.
+ * 토큰 예산을 넘지 않도록 개수와 본문 길이를 제한한다.
  */
 export function buildMemoryContext(userMessage: string, opts: RecallOptions = {}): string {
-  const { shareableOnly = false, dryRun = false } = opts
+  const { shareableOnly = false, dryRun = false, budgetTokens } = opts
   const shareable = (m: MemoryEntry): boolean => !shareableOnly || !m.tags.includes(NO_SHARE_TAG)
 
   const all = listMemories().filter(shareable)
   if (all.length === 0) return ''
 
-  const index = all.map((m) => `- [${TYPE_LABEL[m.type]}] ${m.title}`).join('\n')
+  // 예산이 주어지면 본문은 예산의 1/5, 인덱스는 1/4을 넘지 않게 잡는다.
+  // 관련 기억 개수도 함께 줄여야 개수 × 본문이 다시 예산을 넘지 않는다.
+  const bodyChars = budgetTokens
+    ? Math.max(200, Math.min(FULL_BODY_CHARS, Math.round((budgetTokens / 5) * 1.6)))
+    : FULL_BODY_CHARS
+  const topK = budgetTokens ? Math.max(1, Math.min(FULL_RELEVANT, Math.floor(budgetTokens / 250))) : FULL_RELEVANT
+  const indexBudget = budgetTokens ? Math.round(budgetTokens / 4) : Number.POSITIVE_INFINITY
+
+  const indexLines: string[] = []
+  let indexTokens = 0
+  let omitted = 0
+  // 예산을 넘기는 항목은 건너뛰고 개수만 남긴다 — 목록이 통째로 사라지는 것보다,
+  // 무엇이 더 있는지 모델이 아는 편이 낫다
+  for (const m of all) {
+    const line = `- [${TYPE_LABEL[m.type]}] ${m.title}`
+    const cost = estimateTokens(line)
+    if (indexTokens + cost > indexBudget) {
+      omitted++
+      continue
+    }
+    indexTokens += cost
+    indexLines.push(line)
+  }
+  if (omitted > 0) indexLines.push(`- ...(${omitted}건 생략 — 지식베이스 탭에서 전체 확인)`)
 
   const pinned = pinnedMemories().filter(shareable)
   const search = dryRun ? queryMemories : recallMemories
-  const relevant = search(userMessage, 5).filter(
+  const relevant = search(userMessage, topK).filter(
     (m) => shareable(m) && !pinned.some((p) => p.id === m.id)
   )
 
   const body = (m: MemoryEntry): string =>
-    `### [${TYPE_LABEL[m.type]}] ${m.title}\n${m.content.slice(0, 1500)}`
+    `### [${TYPE_LABEL[m.type]}] ${m.title}\n${m.content.slice(0, bodyChars)}`
 
-  let ctx = `## 지식베이스 (이전 협업에서 기록된 기억)\n\n### 전체 기억 인덱스\n${index}`
+  let ctx = `## 지식베이스 (이전 협업에서 기록된 기억)\n\n### 전체 기억 인덱스\n${indexLines.join('\n')}`
   if (pinned.length > 0) {
     ctx += `\n\n### 항상 지켜야 할 고정 기억\n\n${pinned.map(body).join('\n\n')}`
   }
   if (relevant.length > 0) {
     ctx += `\n\n### 현재 요청과 관련된 기억\n\n${relevant.map(body).join('\n\n')}`
   }
-  ctx +=
-    '\n\n기억을 활용해 사용자의 의도를 파악하고, 관련된 진행 중 작업이나 요구사항이 있으면 선제적으로 제안하라. ' +
-    '교훈(lesson) 기억이 있으면 같은 실수를 반복하지 마라. 기억이 사용자의 현재 발언과 모순되면 현재 발언을 우선하라. ' +
-    '기억은 배경 참고일 뿐 검증된 사실이 아니다. 지금 직접 확인한 것보다 앞세우지 말고, 기억 내용을 이번에 확인한 결과인 것처럼 말하지 마라.'
+  ctx += budgetTokens
+    ? '\n\n기억은 배경 참고일 뿐 검증된 사실이 아니다. 현재 발언과 직접 확인한 것을 우선하라.'
+    : '\n\n기억을 활용해 사용자의 의도를 파악하고, 관련된 진행 중 작업이나 요구사항이 있으면 선제적으로 제안하라. ' +
+      '교훈(lesson) 기억이 있으면 같은 실수를 반복하지 마라. 기억이 사용자의 현재 발언과 모순되면 현재 발언을 우선하라. ' +
+      '기억은 배경 참고일 뿐 검증된 사실이 아니다. 지금 직접 확인한 것보다 앞세우지 말고, 기억 내용을 이번에 확인한 결과인 것처럼 말하지 마라.'
   return ctx
 }

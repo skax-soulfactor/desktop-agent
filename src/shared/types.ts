@@ -14,6 +14,11 @@ export interface ProviderConfig {
   label: string
   model: string
   baseURL?: string
+  /**
+   * 이 모델이 한 요청에서 처리할 수 있는 총 토큰. 로컬(Ollama 등) 모델에서만 의미가 있다 —
+   * 서버의 실제 num_ctx보다 크게 잡으면 프롬프트가 조용히 잘린다. 미지정 시 로컬은 4096.
+   */
+  contextTokens?: number
   /** renderer에는 키 원문을 절대 보내지 않고 존재 여부만 알린다 */
   hasKey?: boolean
 }

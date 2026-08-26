@@ -1,11 +1,12 @@
-import { streamText, stepCountIs } from 'ai'
+import { streamText, stepCountIs, type ToolSet } from 'ai'
 import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
 import { buildAttachmentParts } from './attachments'
-import { getModelFor } from '../llm/providers'
+import { resolveModelFor } from '../llm/providers'
+import { estimateTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
-import { buildTools, toolDefByName, type TurnContext } from '../tools'
+import { buildTools, toolDefByName, PURPOSE_DESCRIPTION, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
 import { getSession, saveSession, appendToSession, addSessionUsage } from './sessions'
@@ -16,8 +17,6 @@ import { memoryTools } from '../memory/tools'
 import { peerTools, buildPeerContext } from '../network/peerTools'
 import { integrationTools } from '../integrations/tools'
 
-const MAX_STEPS = 25
-
 /**
  * 메인(대화) 에이전트가 직접 쓸 수 있는 도구.
  * 확인만 하면 되는 일까지 위임하면 대화가 "잠시만요"로 파편화되므로,
@@ -26,6 +25,20 @@ const MAX_STEPS = 25
 const MAIN_AGENT_TOOLS = ['fs_read', 'fs_list', 'shell_exec']
 
 const activeTurns = new Map<string, AbortController>()
+
+/** 컨텍스트 부족 경고를 세션당 한 번만 띄우기 위한 표시 */
+const contextWarned = new Set<string>()
+
+/**
+ * 직전 턴에서 지식베이스에 실제로 배정된 토큰 예산.
+ * 지식베이스 화면의 "매 턴 주입량" 미리보기가 실제 주입과 어긋나지 않도록 공유한다.
+ * (턴이 한 번도 돌지 않았으면 undefined — 예산 없이 전체를 보여준다)
+ */
+let lastMemoryBudget: number | undefined
+
+export function currentMemoryBudget(): number | undefined {
+  return lastMemoryBudget
+}
 
 export function abortTurn(sessionId: string): void {
   activeTurns.get(sessionId)?.abort()
@@ -36,14 +49,45 @@ export function isTurnRunning(sessionId: string): boolean {
   return activeTurns.has(sessionId)
 }
 
-function baseSystemPrompt(sessionId: string): string {
-  const lines = [
+/**
+ * 좁은 컨텍스트(로컬 모델)용 축약 프롬프트.
+ *
+ * qwen3.5:9b 실측(도구 14개 포함): 전체 프롬프트 3,827토큰 / 축약 프롬프트 2,504토큰.
+ * Ollama 기본 창은 4096이므로 전체 프롬프트에서는 대화가 들어갈 자리가 남지 않는다.
+ * 넘친 만큼은 오류 없이 잘려나가 — 같은 질문에서 전체 프롬프트는 도구를 아예 호출하지
+ * 못했고(또는 엉뚱한 도구를 지어냈고), 축약 프롬프트는 shell_exec를 정확히 호출했다.
+ * 여기서는 지켜지지 않으면 대화가 망가지는 규칙만 남긴다.
+ */
+function compactSystemPrompt(): string[] {
+  return [
+    '너는 사용자의 데스크톱에서 동작하는 에이전트다. 응답은 사용자의 언어로 한다.',
+    `실행 환경: ${platform()} / 홈: ${homedir()} / 현재 시각: ${new Date().toLocaleString()}`,
+    '',
+    '## 규칙',
+    '- 결론부터 답하라. "확인 중입니다", "잠시만요"만 남기고 턴을 끝내지 마라.',
+    '- 사용자가 준 텍스트를 되풀이하지 마라. 번역·요약·교정 요청이면 결과물만 내라 — 원문을 다시 인용하면 정작 결과가 잘린다.',
+    '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
+    '- 파일 읽기·목록 확인·상태 조회는 fs_read/fs_list/shell_exec로 직접 실행하고 그 자리에서 답하라.',
+    '  "실행해도 될까요?"라고 되묻지 마라 — 승인 창은 앱이 자동으로 띄운다.',
+    '- 파일 수정·설치·빌드처럼 부수효과가 있거나 오래 걸리는 일은 delegate_task로 위임하고,',
+    '  무엇을 왜 시작했는지 한 줄로 알린 뒤 턴을 끝내라. 완료를 기다리지 마라.',
+    '- 도구 호출의 purpose에는 "왜 지금 필요한지"를 사용자의 언어로 한 문장 써라. 비워두지 마라.',
+    '- 위에 정의된 도구만 호출하라. 없는 이름(systeminfo 등)을 지어내지 마라. 셸 명령은 shell_exec의 command 인자로 넣는다.',
+    '- 앞으로 계속 쓰일 정보(선호, 규칙, 저장 위치)는 save_memory로 저장하라.',
+    '- "[작업 알림"으로 시작하는 메시지는 시스템이 보낸 작업 상태 알림이다. 사용자 발언으로 취급하지 마라.'
+  ]
+}
+
+/** 클라우드 모델용 전체 프롬프트 */
+function fullSystemPrompt(): string[] {
+  return [
     '너는 사용자의 데스크톱에서 동작하는 협업 에이전트의 메인(대화) 에이전트다. 사용자와의 대화가 최우선이다.',
     `실행 환경: ${platform()} / 홈 디렉토리: ${homedir()}`,
     `현재 시각: ${new Date().toString()}`,
     '',
     '## 답변 규칙 (가장 중요)',
     '- 사용자가 답을 원하면 답을 줘라. "확인 중입니다", "잠시만요"만 남기고 턴을 끝내지 마라.',
+    '- 사용자가 준 텍스트를 되풀이하지 마라. 번역·요약·교정 요청이면 결과물만 내라 — 원문은 사용자가 이미 갖고 있다.',
     '- 도구를 호출하거나 작업을 위임하기 전에, 지금까지 알아낸 것과 현재 가설을 한 문단으로 먼저 말하라. 머릿속에만 두고 넘어가지 마라.',
     '- 사용자가 "그래서 결론이 뭐야"처럼 결론을 요구하면 추가 조사를 시작하지 말고 현재까지의 결론을 먼저 제시하라. 확신이 부족하면 "확인된 사실 / 추정 / 남은 확인거리"로 나눠 밝혀라.',
     '- 확인한 사실과 추정을 반드시 구분해서 말하라. 검증하지 않은 것을 "즉시 해결됩니다"처럼 단정하지 마라.',
@@ -94,6 +138,10 @@ function baseSystemPrompt(sessionId: string): string {
     '- 거부되면 이유를 존중하고 다른 방법을 제안하라. 같은 요청을 그대로 반복하지 마라.',
     '응답은 사용자의 언어로 한다.'
   ]
+}
+
+function baseSystemPrompt(sessionId: string, profile: ModelProfile): string {
+  const lines = profile.local ? compactSystemPrompt() : fullSystemPrompt()
 
   const peerCtx = buildPeerContext()
   if (peerCtx) lines.push('', peerCtx)
@@ -106,6 +154,72 @@ function baseSystemPrompt(sessionId: string): string {
     }
   }
   return lines.join('\n')
+}
+
+/**
+ * 도구 정의가 프롬프트에서 차지하는 몫. 이름·설명은 그대로 계산하고, 인자 스키마는
+ * 도구당 80토큰으로 근사한다 (JSON Schema 직렬화 결과를 여기서 다시 만들지 않기 위한 값 —
+ * qwen3.5 토크나이저 실측에서 도구당 60~100토큰). 게이트 도구에는 purpose 설명이 통째로 붙는다.
+ */
+function estimateToolTokens(tools: ToolSet): number {
+  const purposeTokens = estimateTokens(PURPOSE_DESCRIPTION)
+  let total = 0
+  for (const [name, def] of Object.entries(tools)) {
+    const { description } = def as unknown as { description?: unknown }
+    total += estimateTokens(name + (typeof description === 'string' ? description : '')) + 80
+    if (toolDefByName(name)) total += purposeTokens
+  }
+  return total
+}
+
+/**
+ * 예산에 맞게 과거 대화를 뒤에서부터 담는다.
+ *
+ * 가장 최근 메시지(방금 들어온 사용자 발언)는 예산과 무관하게 반드시 남긴다 — 그게 빠지면
+ * 모델은 아무것도 답할 수 없다. 앞쪽이 도구 결과로 시작하면 짝이 되는 호출이 잘려나간
+ * 것이므로 함께 버린다.
+ */
+function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: number): T[] {
+  if (messages.length <= 1) return messages
+  const cost = (m: T): number => estimateTokens(JSON.stringify(m))
+
+  const kept: T[] = []
+  let used = 0
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    const c = cost(m)
+    if (kept.length > 0 && used + c > budgetTokens) break
+    used += c
+    kept.unshift(m)
+  }
+  // 잘린 지점이 도구 결과 한가운데면 그 앞의 assistant까지 함께 버린다
+  while (kept.length > 1 && kept[0].role === 'tool') kept.shift()
+  return kept
+}
+
+/**
+ * 세션당 한 번 띄울 컨텍스트 경고. 설정값과 서버 실측이 어긋난 경우를 먼저 알린다 —
+ * 그쪽이 원인이 분명하고 조치도 분명하기 때문이다.
+ */
+function contextWarning(profile: ModelProfile, historyBudget: number): string | null {
+  if (!profile.local) return null
+  const { serverContextTokens: server, configuredContextTokens: configured } = profile
+  if (server && server !== configured) {
+    return (
+      `설정에는 ${configured.toLocaleString()}토큰으로 적혀 있지만 Ollama 서버가 실제로 연 창은 ` +
+      `${server.toLocaleString()}토큰입니다. 실제 값에 맞춰 동작하지만, 두 값을 맞춰 두는 편이 좋습니다 — ` +
+      'Ollama를 완전히 종료했다가 새 터미널에서 다시 띄우면 OLLAMA_CONTEXT_LENGTH가 반영됩니다 ' +
+      '(자동 업데이트로 재시작되면 환경 변수를 놓치는 경우가 있습니다).'
+    )
+  }
+  if (historyBudget < 400) {
+    return (
+      `컨텍스트(${profile.contextTokens.toLocaleString()}토큰)가 좁아 대화 기록을 거의 싣지 못합니다. ` +
+      'Ollama라면 OLLAMA_CONTEXT_LENGTH를 올려 서버를 다시 띄우고, ' +
+      '설정 > LLM 프로바이더의 "컨텍스트"에 같은 값을 적으세요.'
+    )
+  }
+  return null
 }
 
 /** 게이트 도구는 정의에서, 작업 관리 도구는 이름별 규칙으로 요약 */
@@ -191,24 +305,50 @@ export async function runTurn(
 
   try {
     // 대화는 도구 호출 품질이 중요하므로 '일반' 등급 사용
-    const { model, config } = getModelFor('standard')
-    const memoryContext = buildMemoryContext(userText)
-    const base = baseSystemPrompt(sessionId)
+    const { model, config, profile } = await resolveModelFor('standard')
+    ctx.resultChars = profile.toolResultChars
+
+    const tools = {
+      ...buildTools(ctx, MAIN_AGENT_TOOLS),
+      ...taskTools(win, sessionId),
+      ...scheduleTools(sessionId),
+      ...memoryTools(win, sessionId),
+      ...peerTools(),
+      ...integrationTools(win, sessionId)
+    }
+    const toolTokens = estimateToolTokens(tools)
+
+    const base = baseSystemPrompt(sessionId, profile)
+    // 지식베이스는 남는 예산 안에서만 주입한다. 시스템 프롬프트와 도구 스키마가 먼저이고,
+    // 히스토리도 최소 한 턴은 들어가야 하므로 기억에는 그중 일부만 준다.
+    const memoryBudget = profile.local
+      ? Math.max(0, Math.floor((profile.promptBudget - estimateTokens(base) - toolTokens) * 0.3))
+      : undefined
+    lastMemoryBudget = memoryBudget
+    const memoryContext =
+      memoryBudget === 0 ? '' : buildMemoryContext(userText, { budgetTokens: memoryBudget })
     const system = memoryContext ? `${base}\n\n${memoryContext}` : base
+
+    // 남은 예산만큼만 과거 대화를 싣는다 — 넘기면 서버가 앞부분을 조용히 잘라낸다
+    const historyBudget = profile.promptBudget - estimateTokens(system) - toolTokens
+    const messages = trimHistory(messagesForModel, historyBudget)
+
+    // 조용히 잘려 이상한 답이 나오는 것보다, 무엇을 바꿔야 하는지 알리는 편이 낫다.
+    const warning = contextWarning(profile, historyBudget)
+    if (warning && !contextWarned.has(sessionId)) {
+      contextWarned.add(sessionId)
+      appendToSession(sessionId, [{ kind: 'notice', text: warning }], [])
+      send({ type: 'notice', text: warning })
+    }
 
     const result = streamText({
       model,
       system,
-      messages: messagesForModel,
-      tools: {
-        ...buildTools(ctx, MAIN_AGENT_TOOLS),
-        ...taskTools(win, sessionId),
-        ...scheduleTools(sessionId),
-        ...memoryTools(win, sessionId),
-        ...peerTools(),
-        ...integrationTools(win, sessionId)
-      },
-      stopWhen: stepCountIs(MAX_STEPS),
+      messages,
+      tools,
+      stopWhen: stepCountIs(profile.maxSteps),
+      ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
+      ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
       abortSignal: abort.signal
     })
 
@@ -242,6 +382,23 @@ export async function runTurn(
           item.output = output.slice(0, 2000)
         }
         send({ type: 'tool-result', toolCallId: part.toolCallId, status, output: output.slice(0, 2000) })
+      } else if (part.type === 'tool-error') {
+        // 없는 도구 이름이나 스키마에 맞지 않는 인자 — 로컬 모델에서 흔하다.
+        // SDK가 오류를 모델에 되돌려 주므로 대화는 이어지지만, 카드를 확정하고
+        // 실패 신호를 남기지 않으면 '실행 중'으로 굳어 버린다.
+        const message = part.error instanceof Error ? part.error.message : String(part.error)
+        const item = toolItems.get(part.toolCallId)
+        if (item) {
+          item.status = 'error'
+          item.output = message.slice(0, 2000)
+        }
+        ctx.failures.push({ kind: 'tool-error', detail: `${part.toolName} — ${message.slice(0, 200)}` })
+        send({
+          type: 'tool-result',
+          toolCallId: part.toolCallId,
+          status: 'error',
+          output: message.slice(0, 2000)
+        })
       } else if (part.type === 'error') {
         throw part.error instanceof Error ? part.error : new Error(String(part.error))
       }
@@ -263,10 +420,12 @@ export async function runTurn(
         break
       }
     }
+    // 미해결 도구를 저장 전에 확정한다 — 저장 뒤에 고치면 화면만 바뀌고
+    // 디스크에는 '실행 중'인 카드가 영구히 남는다
+    const unresolvedIds = resolveDanglingTools(toolItems)
     appendToSession(sessionId, newItems, response.messages)
     addSessionUsage(sessionId, usage.input, usage.output)
-    // 정상 종료 시에도 방어적으로 미해결 도구를 확정 (스텝 한도 등 대비)
-    send({ type: 'turn-end', unresolvedToolCallIds: resolveDanglingTools(toolItems), usage })
+    send({ type: 'turn-end', unresolvedToolCallIds: unresolvedIds, usage })
 
     // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다. 실패는 삼키지 않고 화면에 알린다
     void extractMemories(sessionId, buildTranscript(userText + attachNote, newItems), ctx.failures)

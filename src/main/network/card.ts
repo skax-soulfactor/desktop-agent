@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import type { AgentCard } from '@shared/types'
 import { completeText } from '../llm/complete'
-import { getModelFor } from '../llm/providers'
+import { estimateTokens, fitToTokens } from '../llm/profile'
+import { resolveModelFor } from '../llm/providers'
 import { listMemories } from '../memory/store'
 import { getMyCard, saveMyCard, getNetworkConfig } from './store'
 import { recordUsage } from '../usage/store'
@@ -51,11 +52,16 @@ export async function regenerateCard(): Promise<AgentCard> {
   const shareable = listMemories().filter((m) => !m.tags.includes(NO_SHARE_TAG))
   const index = shareable.map((m) => `- [${m.type}] ${m.title} (${m.tags.join(', ')})`).join('\n')
 
-  const { model, config } = getModelFor('light')
+  const { model, config, profile } = await resolveModelFor('light')
   const { text, usage } = await completeText({
     model,
     system: PROMPT,
-    prompt: `## 지식베이스 인덱스 (공유 가능 항목)\n${index || '(비어 있음)'}`
+    prompt: fitToTokens(
+      `## 지식베이스 인덱스 (공유 가능 항목)\n${index || '(비어 있음)'}`,
+      profile.promptBudget - estimateTokens(PROMPT) - 64
+    ),
+    ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
+    ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {})
   })
   recordUsage({ kind: 'network', provider: config.label, model: config.model, tier: 'light' }, usage)
   const parsed = parseCard(text)

@@ -1,7 +1,7 @@
 import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 import { readFileSync, writeFileSync } from 'fs'
 import type { ApprovalDecision, AttachmentPayload, ProviderConfig } from '@shared/types'
-import { runTurn, abortTurn, isTurnRunning } from './agent/loop'
+import { runTurn, abortTurn, isTurnRunning, currentMemoryBudget } from './agent/loop'
 import { listTasks, cancelTask } from './agent/tasks'
 import { respondClarify, pendingClarifications } from './agent/clarify'
 import { listSchedules, deleteSchedule, setScheduleEnabled } from './agent/scheduler'
@@ -139,10 +139,13 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   )
   ipcMain.handle('memory:review', () => needsReview())
   ipcMain.handle('memory:markReviewed', (_e, id: string) => markReviewed(id))
-  // 빈 질의로 만든 블록 = 검색과 무관하게 매 턴 항상 들어가는 고정 비용
-  ipcMain.handle('memory:stats', () => memoryStats(buildMemoryContext('', { dryRun: true })))
+  // 빈 질의로 만든 블록 = 검색과 무관하게 매 턴 항상 들어가는 고정 비용.
+  // 예산은 실제 턴에서 쓰인 값을 그대로 적용한다 — 로컬 모델에서는 여기가 크게 줄어든다.
+  ipcMain.handle('memory:stats', () =>
+    memoryStats(buildMemoryContext('', { dryRun: true, budgetTokens: currentMemoryBudget() }))
+  )
   ipcMain.handle('memory:preview', (_e, query: string) => {
-    const text = buildMemoryContext(query, { dryRun: true })
+    const text = buildMemoryContext(query, { dryRun: true, budgetTokens: currentMemoryBudget() })
     return { text, tokens: estimateTokens(text) }
   })
   ipcMain.handle('memory:export', async (_e, format: 'json' | 'md') => {

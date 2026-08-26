@@ -1,6 +1,7 @@
 import { stepCountIs } from 'ai'
 import { completeText } from '../llm/complete'
-import { getModelFor } from '../llm/providers'
+import { estimateTokens } from '../llm/profile'
+import { resolveModelFor } from '../llm/providers'
 import { buildMemoryContext } from '../memory/recall'
 import { recordUsage } from '../usage/store'
 
@@ -15,14 +16,22 @@ const RESPONDER_PROMPT = `너는 다른 사용자의 에이전트로부터 온 �
 
 /** 피어의 question 요청에 대해 지식베이스로 답변을 생성한다 (도구 없음, 공유 제외 기억 배제) */
 export async function answerQuestion(question: string): Promise<string> {
-  const memoryContext = buildMemoryContext(question, { shareableOnly: true })
+  const { model, config, profile } = await resolveModelFor('standard')
+  const memoryBudget = profile.local
+    ? Math.max(0, Math.floor((profile.promptBudget - estimateTokens(RESPONDER_PROMPT + question)) * 0.6))
+    : undefined
+  const memoryContext = buildMemoryContext(question, {
+    shareableOnly: true,
+    budgetTokens: memoryBudget
+  })
   const system = memoryContext ? `${RESPONDER_PROMPT}\n\n${memoryContext}` : RESPONDER_PROMPT
-  const { model, config } = getModelFor('standard')
   const { text, usage } = await completeText({
     model,
     system,
     prompt: question,
-    stopWhen: stepCountIs(1)
+    stopWhen: stepCountIs(1),
+    ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
+    ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {})
   })
   recordUsage({ kind: 'network', provider: config.label, model: config.model, tier: 'standard' }, usage)
   return text.trim() || '답변을 생성하지 못했습니다.'

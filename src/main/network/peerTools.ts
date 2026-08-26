@@ -2,8 +2,13 @@ import { tool, type ToolSet } from 'ai'
 import { z } from 'zod'
 import { askPeer, delegateToPeer, peerSummaries } from './manager'
 
-/** 메인(대화) 에이전트가 다른 에이전트를 호출하는 도구 */
+/**
+ * 메인(대화) 에이전트가 다른 에이전트를 호출하는 도구.
+ * 연결된 피어가 없으면 아무것도 노출하지 않는다 — 쓸 수 없는 도구 정의는
+ * 프롬프트만 차지하고, 좁은 컨텍스트에서는 그만큼 대화가 밀려난다.
+ */
 export function peerTools(): ToolSet {
+  if (peerSummaries().length === 0) return {}
   return {
     list_peers: tool({
       description:
