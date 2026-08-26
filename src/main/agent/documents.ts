@@ -143,14 +143,27 @@ export function looksUnchanged(source: string, output: string): boolean {
   if (!a) return false // 코드뿐인 조각 — 바꿀 산문이 없다
   if (!b) return true
   if (a === b) return true
-  // 길이가 비슷한데 앞부분이 길게 일치하면 사실상 복사본이다
-  const ratio = b.length / a.length
-  if (ratio < 0.6 || ratio > 1.6) return false
+
+  // 앞부분이 길게 일치하면 복사본이다
   const n = Math.min(a.length, b.length)
   let same = 0
   while (same < n && a[same] === b[same]) same++
-  return same >= Math.min(200, n * 0.5)
+  if (same >= Math.min(200, n * 0.5)) return true
+
+  // 출력 단어가 대부분 원문에 그대로 있으면 변환되지 않은 것이다. 순서를 바꾸거나
+  // 일부를 줄여 놓아도 잡힌다 — 앞부분 비교만으로는 그런 경우를 놓친다.
+  // 같은 언어로 요약하는 작업은 여기서 오탐이 날 수 있지만, 오탐의 대가는 재시도 한 번뿐이고
+  // 재시도가 실패하면 첫 결과를 그대로 쓰므로 결과가 나빠지지는 않는다.
+  const words = (s: string): string[] => s.toLowerCase().match(/[a-z0-9가-힣]+/g) ?? []
+  const src = new Set(words(a))
+  const out = words(b)
+  if (out.length < 20) return false
+  const shared = out.filter((w) => src.has(w)).length
+  return shared / out.length > 0.85
 }
+
+/** 조각 하나당 최대 시도 횟수 (첫 시도 + 재시도 2회) */
+const MAX_CHUNK_ATTEMPTS = 3
 
 const RETRY_HINT =
   '\n\n중요: 직전 시도에서 원문을 그대로 복사해 돌려주는 실패가 있었다. ' +
@@ -196,11 +209,16 @@ export async function runDocumentJob(
     if (hooks.signal.aborted) throw new Error('사용자가 중지했습니다.')
     hooks.onProgress(i, chunks.length)
     let out = await runChunk(chunks[i], i, '')
-    if (looksUnchanged(chunks[i], out)) {
+    // 같은 조각이 어떤 때는 처리되고 어떤 때는 원문 그대로 돌아온다. 결과를 보고 다시 시킨다.
+    for (let attempt = 1; attempt < MAX_CHUNK_ATTEMPTS && looksUnchanged(chunks[i], out); attempt++) {
+      if (hooks.signal.aborted) throw new Error('사용자가 중지했습니다.')
       const retry = await runChunk(chunks[i], i, RETRY_HINT)
-      // 재시도가 실패하면 첫 결과를 쓴다 — 코드 블록뿐인 조각은 원문 그대로가 정답이다
-      if (looksUnchanged(chunks[i], retry)) unchanged++
-      else out = retry
+      // 재시도가 나아지지 않으면 첫 결과를 유지한다 — 결과가 나빠지지는 않게
+      if (!looksUnchanged(chunks[i], retry)) {
+        out = retry
+        break
+      }
+      if (attempt === MAX_CHUNK_ATTEMPTS - 1) unchanged++
     }
     parts.push(out)
   }
@@ -240,6 +258,18 @@ export async function runDocumentJob(
   return { text: pending[0] ?? '', chunks: chunks.length, unchanged, inputTokens, outputTokens }
 }
 
+/**
+ * 지시 내용으로 처리 방식을 고른다.
+ *
+ * 좁은 창의 모델은 mode를 자주 틀리게 고르는데, 틀리면 번역 결과가 요약되어 돌아오는 식으로
+ * 결과가 통째로 어긋난다. 집계형 동사가 보일 때만 병합(reduce)으로 가고, 나머지는 이어 붙인다.
+ */
+export function inferMode(instruction: string): 'transform' | 'reduce' {
+  return /요약|정리|분석|추출|비교|목록|리스트|핵심|정리해|summar|analy|extract|outline/i.test(instruction)
+    ? 'reduce'
+    : 'transform'
+}
+
 /** 메인 에이전트에게 노출되는 문서 처리 도구 */
 export function documentTools(
   sessionId: string,
@@ -258,8 +288,10 @@ export function documentTools(
           .describe('각 조각에 그대로 적용할 지시 (예: "한국어로 번역하라"). 조각 번호나 문서 이름은 넣지 마라'),
         mode: z
           .enum(['transform', 'reduce'])
+          .optional()
           .describe(
-            'transform=번역·재작성처럼 조각별 결과를 이어 붙이면 되는 작업, reduce=요약·분석처럼 마지막에 합쳐야 하는 작업'
+            'transform=번역·재작성처럼 조각별 결과를 이어 붙이면 되는 작업, reduce=요약·분석처럼 마지막에 합쳐야 하는 작업. ' +
+              '생략하면 지시 내용을 보고 자동으로 고른다'
           )
       }),
       execute: async ({ documentId, instruction, mode }) => {
@@ -267,7 +299,7 @@ export function documentTools(
         if (!doc) return { error: `documentId ${documentId}에 해당하는 문서가 없습니다.` }
         if (doc.sessionId !== sessionId) return { error: '다른 대화의 문서입니다.' }
         try {
-          const info = start(documentId, instruction, mode)
+          const info = start(documentId, instruction, mode ?? inferMode(instruction))
           return { taskId: info.id, status: info.status, documentTokens: doc.tokens }
         } catch (e) {
           return { error: describeError(e) }

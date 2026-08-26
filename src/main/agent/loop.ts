@@ -3,7 +3,7 @@ import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
 import { buildAttachmentParts, buildUserContent } from './attachments'
-import { documentTools } from './documents'
+import { documentTools, registerDocument } from './documents'
 import { resolveModelFor, type ResolvedModel } from '../llm/providers'
 import { estimateTokens, fitToTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
@@ -68,8 +68,9 @@ function compactSystemPrompt(): string[] {
     '- 결론부터 답하라. "확인 중입니다", "잠시만요"만 남기고 턴을 끝내지 마라.',
     '- 사용자가 준 텍스트를 되풀이하지 마라. 번역·요약·교정 요청이면 결과물만 내라 — 원문을 다시 인용하면 정작 결과가 잘린다.',
     '- 첨부(문서 본문·이미지·PDF)는 메시지 안에 이미 들어 있다. 직접 읽고 처리하라. 파일을 다시 달라고 하지 마라.',
-    '- 단 "documentId"가 붙은 첨부는 네 창보다 커서 미리보기만 실려 있다. 그 문서 전체를 대상으로 하는',
-    '  번역·요약·분석은 미리보기로 답하지 말고 process_document로 처리하라. 분할·병합은 앱이 한다.',
+    '- "documentId"가 붙어 오는 것(첨부, 큰 파일 읽기 결과, 긴 셸 출력)은 네 창보다 커서 미리보기만 실린 것이다.',
+    '  그 전체를 대상으로 하는 작업(번역·요약·분석·추출)은 미리보기로 답하지 말고 process_document를 호출하라.',
+    '  분할·처리·병합은 앱이 알아서 한다. 네가 조각을 나누거나 "앞부분만 했다"고 답할 필요 없다.',
     '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
     '- 파일 읽기·목록 확인·상태 조회는 fs_read/fs_list/shell_exec로 직접 실행하고 그 자리에서 답하라.',
     '  "실행해도 될까요?"라고 되묻지 마라 — 승인 창은 앱이 자동으로 띄운다.',
@@ -183,7 +184,7 @@ function estimateToolTokens(tools: ToolSet): number {
  * 모델은 아무것도 답할 수 없다. 앞쪽이 도구 결과로 시작하면 짝이 되는 호출이 잘려나간
  * 것이므로 함께 버린다.
  */
-function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: number): T[] {
+function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: number, sessionId: string): T[] {
   const cost = (m: T): number => estimateTokens(JSON.stringify(m))
 
   const kept: T[] = []
@@ -201,7 +202,7 @@ function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: nu
   // 메시지 하나만 남았는데 그것도 예산을 넘으면(대용량 첨부·긴 붙여넣기) 본문을 줄인다
   const last = kept[kept.length - 1]
   if (kept.length === 1 && last && cost(last) > budgetTokens) {
-    kept[0] = fitMessage(last, budgetTokens)
+    kept[0] = fitMessage(last, budgetTokens, sessionId)
   }
   return kept
 }
@@ -214,17 +215,31 @@ function trimHistory<T extends { role: string }>(messages: T[], budgetTokens: nu
  * 여기서 직접 자르고 잘렸다고 적어 두면, 적어도 앞부분은 확실히 전달되고 모델이
  * 일부만 봤다는 사실을 사용자에게 알릴 수 있다.
  */
-function fitMessage<T extends { role: string }>(message: T, budgetTokens: number): T {
-  // 잘림 사실만 설명하다 정작 요청을 처리하지 않는 응답이 나오지 않도록,
-  // "받은 만큼 처리하라"를 먼저 지시하고 안내는 마지막 한 줄로 제한한다
-  const NOTE =
-    '\n\n...[내용이 길어 여기까지만 전달되었다. 받은 부분까지 요청을 그대로 수행하고, 맨 마지막에 한 줄로 "문서가 길어 앞부분만 처리했다"고만 덧붙여라.]'
-  const room = Math.max(256, budgetTokens - estimateTokens(NOTE))
+function fitMessage<T extends { role: string }>(
+  message: T,
+  budgetTokens: number,
+  sessionId: string
+): T {
   const { content } = message as { content?: unknown }
 
+  // 잘린 뒷부분도 문서로 남긴다 — 그래야 "앞부분만 했다"로 끝나지 않고
+  // 에이전트가 process_document로 전체를 나눠 처리할 수 있다
+  const noteFor = (full: string): string => {
+    const doc = registerDocument(sessionId, '대화에 붙여넣은 긴 텍스트', full)
+    return (
+      `\n\n...[길어서 여기까지만 전달되었다. 전문은 documentId="${doc.id}"(약 ${doc.tokens.toLocaleString()}토큰)로 보관되어 있다. ` +
+      '전체를 대상으로 하는 작업이면 process_document로 나눠 처리하고, 앞부분만으로 충분한 질문이면 그대로 답하라.]'
+    )
+  }
+
   if (typeof content === 'string') {
+    const NOTE = noteFor(content)
+    const room = Math.max(256, budgetTokens - estimateTokens(NOTE))
     return { ...message, content: fitToTokens(content, room) + NOTE }
   }
+
+  const NOTE = '\n\n...[길어서 여기까지만 전달되었다. 받은 부분까지 처리하고 잘렸다는 사실을 알려라.]'
+  const room = Math.max(256, budgetTokens - estimateTokens(NOTE))
   if (Array.isArray(content)) {
     // 이미지·PDF 파트는 자를 수 없으니 텍스트 파트만 줄인다
     const texts = content.filter((p: unknown) => (p as { type?: string }).type === 'text')
@@ -394,7 +409,7 @@ export async function runTurn(
 
     // 남은 예산만큼만 과거 대화를 싣는다 — 넘기면 서버가 앞부분을 조용히 잘라낸다
     const historyBudget = profile.promptBudget - estimateTokens(system) - toolTokens
-    const messages = trimHistory(messagesForModel, historyBudget)
+    const messages = trimHistory(messagesForModel, historyBudget, sessionId)
 
     // 조용히 잘려 이상한 답이 나오는 것보다, 무엇을 바꿔야 하는지 알리는 편이 낫다.
     const warning = contextWarning(profile, historyBudget)
