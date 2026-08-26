@@ -5,6 +5,9 @@ interface CompleteOptions {
   system: string
   prompt: string
   stopWhen?: StopCondition<ToolSet> | StopCondition<ToolSet>[]
+  /** 로컬 모델은 출력이 길어지면 컨텍스트를 넘겨 응답이 잘린다 — 프로파일 값을 넘긴다 */
+  maxOutputTokens?: number
+  temperature?: number
 }
 
 /**

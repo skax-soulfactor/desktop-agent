@@ -34,13 +34,14 @@ const DEFAULT_MODEL: Record<ProviderType, string> = {
   'openai-compatible': ''
 }
 
-const emptyForm = (): ProviderConfig & { apiKey: string } => ({
+const emptyForm = (): ProviderConfig & { apiKey: string; contextText: string } => ({
   id: crypto.randomUUID(),
   type: 'anthropic',
   label: '',
   model: DEFAULT_MODEL.anthropic,
   baseURL: '',
-  apiKey: ''
+  apiKey: '',
+  contextText: ''
 })
 
 const emptyMcpForm = (): {
@@ -51,6 +52,12 @@ const emptyMcpForm = (): {
   headersJson: string
   envJson: string
 } => ({ name: '', transport: 'stdio', command: '', url: '', headersJson: '', envJson: '' })
+
+/** 로컬 서버에서 도는 모델인가 — 컨텍스트 기본값 표시에만 쓴다 (판정 본체는 main/llm/profile.ts) */
+function isLocalEndpoint(p: ProviderConfig): boolean {
+  if (p.type === 'ollama') return true
+  return p.type === 'openai-compatible' && /\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(p.baseURL ?? '')
+}
 
 /** JSON 오브젝트 입력(선택)을 파싱. 비어 있으면 undefined, 잘못됐으면 오류 던짐 */
 function parseRecord(label: string, json: string): Record<string, string> | undefined {
@@ -143,15 +150,36 @@ export default function SettingsView(): JSX.Element {
   const needsBaseURL = form.type === 'ollama' || form.type === 'openai-compatible'
   const needsKey = form.type !== 'ollama'
 
+  /**
+   * 기존 프로바이더를 아래 폼으로 불러온다. 같은 id로 저장하면 갱신되므로
+   * 컨텍스트 값 하나를 바꾸려고 지웠다 다시 만들 필요가 없다.
+   * API 키는 비워 둔 채로 저장하면 키체인에 있는 기존 값이 그대로 유지된다.
+   */
+  const editProvider = (p: ProviderConfig): void => {
+    setForm({
+      id: p.id,
+      type: p.type,
+      label: p.label,
+      model: p.model,
+      baseURL: p.baseURL ?? '',
+      apiKey: '',
+      contextText: p.contextTokens ? String(p.contextTokens) : ''
+    })
+  }
+
+  const editingExisting = providers.some((p) => p.id === form.id)
+
   const save = async (): Promise<void> => {
     if (!form.label || !form.model) return
+    const contextTokens = Number.parseInt(form.contextText, 10)
     await window.api.saveProvider(
       {
         id: form.id,
         type: form.type,
         label: form.label,
         model: form.model,
-        baseURL: form.baseURL || undefined
+        baseURL: form.baseURL || undefined,
+        contextTokens: Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : undefined
       },
       form.apiKey || undefined
     )
@@ -172,7 +200,7 @@ export default function SettingsView(): JSX.Element {
           <table>
             <thead>
               <tr>
-                <th>이름</th><th>종류</th><th>모델</th><th>API 키</th><th></th>
+                <th>이름</th><th>종류</th><th>모델</th><th>컨텍스트</th><th>API 키</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -181,11 +209,21 @@ export default function SettingsView(): JSX.Element {
                   <td>{p.label}</td>
                   <td className="dim">{p.type}</td>
                   <td className="dim">{p.model}</td>
+                  <td className="dim">
+                    {p.contextTokens
+                      ? `${p.contextTokens.toLocaleString()} 토큰`
+                      : isLocalEndpoint(p)
+                        ? '4,096 (기본값)'
+                        : '-'}
+                  </td>
                   <td className="dim">{p.hasKey ? '저장됨 (키체인)' : '-'}</td>
                   <td>
-                    <button className="danger" onClick={() => void window.api.deleteProvider(p.id).then(refresh)}>
-                      삭제
-                    </button>
+                    <div className="row">
+                      <button onClick={() => editProvider(p)}>수정</button>
+                      <button className="danger" onClick={() => void window.api.deleteProvider(p.id).then(refresh)}>
+                        삭제
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -226,7 +264,7 @@ export default function SettingsView(): JSX.Element {
         </table>
       </div>
 
-      <h3>프로바이더 추가</h3>
+      <h3>{editingExisting ? '프로바이더 수정' : '프로바이더 추가'}</h3>
       <div className="card grid-form">
         <span>종류</span>
         <select
@@ -264,6 +302,21 @@ export default function SettingsView(): JSX.Element {
               value={form.baseURL}
               onChange={(e) => setForm({ ...form, baseURL: e.target.value })}
             />
+            <span>컨텍스트</span>
+            <div>
+              <input
+                style={{ width: '100%', boxSizing: 'border-box' }}
+                placeholder="토큰 수 — 비워두면 4096 (Ollama 서버 기본값)"
+                value={form.contextText}
+                onChange={(e) => setForm({ ...form, contextText: e.target.value })}
+              />
+              <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 6 }}>
+                모델이 지원하는 최대 길이가 아니라 <b>서버가 실제로 여는 창</b>을 적으세요. Ollama는
+                모델과 무관하게 기본 4096으로 뜹니다 — <code>OLLAMA_CONTEXT_LENGTH</code> 환경 변수로
+                올린 뒤 그 값을 여기에 적으면 에이전트가 프롬프트·기억·도구 결과를 그만큼 넉넉히 씁니다.
+                실제보다 크게 적으면 프롬프트가 오류 없이 잘려 엉뚱한 답이 나옵니다.
+              </div>
+            </div>
           </>
         )}
         {needsKey && (
@@ -271,7 +324,11 @@ export default function SettingsView(): JSX.Element {
             <span>API 키</span>
             <input
               type="password"
-              placeholder="OS 키체인에 암호화 저장됩니다"
+              placeholder={
+                editingExisting
+                  ? '비워두면 기존 키를 그대로 사용합니다'
+                  : 'OS 키체인에 암호화 저장됩니다'
+              }
               value={form.apiKey}
               onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
             />
@@ -279,7 +336,10 @@ export default function SettingsView(): JSX.Element {
         )}
         <span />
         <div className="row">
-          <button className="primary" onClick={() => void save()}>추가</button>
+          <button className="primary" onClick={() => void save()}>
+            {editingExisting ? '저장' : '추가'}
+          </button>
+          {editingExisting && <button onClick={() => setForm(emptyForm())}>취소</button>}
           {saved && <span style={{ color: 'var(--ok)' }}>저장됨</span>}
         </div>
       </div>

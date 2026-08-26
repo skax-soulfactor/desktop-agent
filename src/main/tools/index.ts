@@ -18,20 +18,60 @@ export interface TurnContext {
   sessionId: string
   win: BrowserWindow
   failures: FailureSignal[]
+  /**
+   * 도구 결과 1건을 모델에 돌려줄 때의 문자 상한 (ModelProfile.toolResultChars).
+   * shell_exec는 100KB, fs_read는 200KB까지 반환하는데, 컨텍스트가 4096토큰인
+   * 로컬 모델에서는 결과 한 건이 대화 전체를 창 밖으로 밀어낸다.
+   */
+  resultChars?: number
+}
+
+/**
+ * 도구 결과를 예산 안으로 줄인다. 통째로 자르면 JSON이 깨지므로,
+ * 작은 필드는 그대로 두고 큰 문자열·배열 필드만 남은 예산을 나눠 갖는다.
+ */
+function capOutput(value: unknown, maxChars: number): unknown {
+  const size = (v: unknown): number => (JSON.stringify(v) ?? '').length
+  if (size(value) <= maxChars) return value
+
+  if (typeof value === 'string') {
+    return `${value.slice(0, maxChars)}\n...[${value.length - maxChars}자 잘림 — 필요하면 범위를 좁혀 다시 조회하라]`
+  }
+  if (Array.isArray(value)) {
+    const kept: unknown[] = []
+    let used = 0
+    for (const item of value) {
+      const cost = size(item) + 1
+      if (used + cost > maxChars) break
+      used += cost
+      kept.push(item)
+    }
+    if (kept.length < value.length) kept.push(`...[${value.length - kept.length}개 항목 생략]`)
+    return kept
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    const large = entries.filter(([, v]) => size(v) > 200)
+    if (large.length === 0) return value
+    const usedBySmall = entries
+      .filter(([, v]) => size(v) <= 200)
+      .reduce((n, [k, v]) => n + k.length + size(v) + 4, 0)
+    const share = Math.max(200, Math.floor((maxChars - usedBySmall) / large.length))
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of entries) out[k] = size(v) > 200 ? capOutput(v, share) : v
+    return out
+  }
+  return value
 }
 
 /**
  * 승인 다이얼로그에 함께 띄울 목적 설명. 모든 게이트 도구의 입력에 주입된다.
  * 사용자는 "무엇을 실행하는지"가 아니라 "왜 지금 필요한지"를 알아야 허용 여부를 판단할 수 있다.
  */
-export const PURPOSE_FIELD = z
-  .string()
-  .optional()
-  .describe(
-    '이 실행이 왜 필요한지 사용자에게 보여줄 한 문장(사용자의 언어로). 반드시 채워라. ' +
-      '명령을 되풀이하지 말고 목적을 써라. ' +
-      '예) "빌드 실패 원인을 좁히려고 최근 수정된 설정 파일의 변경 시각을 확인합니다."'
-  )
+export const PURPOSE_DESCRIPTION =
+  '이 실행이 왜 필요한지 사용자에게 보여줄 한 문장(사용자의 언어로). 반드시 채워라. 명령을 되풀이하지 말고 목적을 써라.'
+
+export const PURPOSE_FIELD = z.string().optional().describe(PURPOSE_DESCRIPTION)
 
 /** 게이트 도구 입력에 purpose를 덧붙인다 (원래 스키마는 건드리지 않는다) */
 function withPurpose(schema: z.ZodTypeAny): z.ZodTypeAny {
@@ -71,7 +111,8 @@ export function buildTools(ctx: TurnContext, only?: string[]): ToolSet {
           return { denied: true, reason: gate.reason }
         }
         try {
-          return await def.execute(input)
+          const result = await def.execute(input)
+          return ctx.resultChars ? capOutput(result, ctx.resultChars) : result
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
           ctx.failures.push({ kind: 'tool-error', detail: `${summary} — ${msg}` })

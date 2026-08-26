@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { MemoryOpSummary } from '@shared/types'
 import { completeText } from '../llm/complete'
+import { estimateTokens, fitToTokens } from '../llm/profile'
 import { getModelFor } from '../llm/providers'
 import { createMemory, listMemories, updateMemory } from './store'
 import { recordUsage } from '../usage/store'
@@ -50,13 +51,44 @@ const EXTRACT_PROMPT = `너는 데스크톱 에이전트의 기억 관리자다.
 {"ops":[{"op":"create","type":"user|requirement|lesson|reference","title":"한 줄 요약","content":"본문","tags":["태그"]}]}
 update/archive 시에는 {"op":"update","id":"대상 기억 id",...} 형태로 id를 포함하라.`
 
+/**
+ * 좁은 컨텍스트(로컬 모델)용 축약본. 전체 프롬프트는 2,500자가 넘어, 기존 기억 목록과
+ * 턴 기록까지 더하면 Ollama 기본 창(4096토큰)을 넘겨 출력이 중간에 끊긴다.
+ */
+const COMPACT_EXTRACT_PROMPT = `너는 데스크톱 에이전트의 기억 관리자다. 방금 끝난 대화 턴에서 장기 기억으로 남길 것만 뽑아라.
+
+타입: user(역할·전문성·선호) / requirement(진행 중 작업·목표·제약) / lesson(에이전트의 실수와 재발 방지) / reference(URL·문서 위치)
+
+규칙:
+- 같은 주제의 기존 기억이 있으면 create 대신 update(id 포함).
+- 일회성 내용, 검증되지 않은 진단·해결책은 저장하지 마라.
+- 비밀번호·API 키·토큰은 절대 저장하지 마라.
+- 저장할 것이 없으면 ops를 빈 배열로 반환하라.
+- 모든 기억은 한국어로 짧게 쓴다. lesson 본문은 "**상황:** ...\\n\\n**실수:** ...\\n\\n**원인:** ...\\n\\n**재발 방지:** ..." 형식.
+
+아래 JSON만 출력하라. 설명·인사·코드 펜스 금지.
+{"ops":[{"op":"create","type":"user","title":"한 줄 요약","content":"본문","tags":["태그"]}]}`
+
 /** 모델이 코드 펜스나 사족을 붙여도 JSON 본문만 골라 파싱한다 (구조화 출력 미지원 모델 호환) */
 function parseOps(raw: string): z.infer<typeof opsSchema> {
-  let text = raw.trim()
+  // 로컬 사고형 모델(qwen3 계열 등)은 <think> 블록을 본문 앞에 붙인다.
+  // 닫히지 않은 채 끊긴 경우도 있으므로 열림 태그 이후를 통째로 버린다.
+  let text = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+  if (/<think>/i.test(text)) text = text.replace(/<think>[\s\S]*$/i, '').trim()
+
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (fence) text = fence[1].trim()
   const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
+  let end = text.lastIndexOf('}')
+  // 출력 상한에 걸려 끊긴 JSON — 마지막으로 온전한 op까지만 복구한다.
+  // 실패로 버리면 이번 턴의 기억이 통째로 사라진다.
+  if (start >= 0 && end <= start) {
+    const lastOp = text.lastIndexOf('},')
+    if (lastOp > start) {
+      text = `${text.slice(0, lastOp + 1)}]}`
+      end = text.length - 1
+    }
+  }
   if (start < 0 || end <= start) throw new Error(`JSON 없음: ${raw.slice(0, 120)}`)
   const parsed: unknown = JSON.parse(text.slice(start, end + 1))
   const result = opsSchema.safeParse(parsed)
@@ -70,22 +102,38 @@ export async function extractMemories(
   failures: FailureSignal[]
 ): Promise<MemoryOpSummary[]> {
   // 배경 작업이므로 경량 등급 사용 (미배정 시 일반으로 폴백)
-  const { model, config } = getModelFor('light')
-  const existing = listMemories()
-    .map((m) => `- id=${m.id} [${m.type}] ${m.title}`)
-    .join('\n')
+  const { model, config, profile } = getModelFor('light')
+  const system = profile.local ? COMPACT_EXTRACT_PROMPT : EXTRACT_PROMPT
 
   const failureText =
     failures.length > 0
       ? `\n\n## 이번 턴의 실패 신호 (교훈 후보)\n${failures.map((f) => `- (${f.kind}) ${f.detail}`).join('\n')}`
       : ''
 
+  // 남은 예산을 기존 기억 목록과 턴 기록이 나눠 쓴다. 넘기면 서버가 앞부분을 잘라내
+  // 지시가 사라진 채 모델이 아무 텍스트나 뱉는다.
+  const inputBudget =
+    profile.promptBudget - estimateTokens(system) - estimateTokens(failureText) - 128
+  const existing = fitToTokens(
+    listMemories()
+      .map((m) => `- id=${m.id} [${m.type}] ${m.title}`)
+      .join('\n'),
+    Math.max(0, Math.floor(inputBudget * 0.3))
+  )
+  const transcript = fitToTokens(
+    turnTranscript,
+    Math.max(256, Math.floor(inputBudget * 0.7)),
+    false // 턴의 끝(가장 최근 발언)이 기억할 값이 크다
+  )
+
   // generateObject(구조화 출력)는 일부 모델이 미지원이라, 어떤 챗 모델에서도 동작하는
   // 텍스트 생성 + 관대한 JSON 파싱을 사용한다
   const { text, usage } = await completeText({
     model,
-    system: EXTRACT_PROMPT,
-    prompt: `## 기존 기억 목록\n${existing || '(없음)'}\n\n## 이번 턴 대화\n${turnTranscript.slice(-8000)}${failureText}`
+    system,
+    prompt: `## 기존 기억 목록\n${existing || '(없음)'}\n\n## 이번 턴 대화\n${transcript}${failureText}`,
+    ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
+    ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {})
   })
   recordUsage(
     { sessionId, kind: 'memory', provider: config.label, model: config.model, tier: 'light' },

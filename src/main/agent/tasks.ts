@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { BrowserWindow } from 'electron'
 import type { ChatItem, ModelTier, TaskInfo, TaskStatus } from '@shared/types'
 import { getModelFor } from '../llm/providers'
+import { estimateTokens } from '../llm/profile'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, type TurnContext } from '../tools'
 import { buildMemoryContext } from '../memory/recall'
@@ -13,8 +14,6 @@ import { notifyIfBackground } from '../notify'
 import { clarifyTool } from './clarify'
 import { integrationTools } from '../integrations/tools'
 import { mcpToolsFor } from '../mcp/manager'
-
-const MAX_STEPS = 25
 
 interface Task {
   info: TaskInfo
@@ -73,6 +72,22 @@ export function startTask(
   return { ...info }
 }
 
+/** 좁은 컨텍스트(로컬 모델)용 축약 워커 프롬프트 — 지켜지지 않으면 보고가 망가지는 규칙만 남긴다 */
+function compactWorkerPrompt(): string {
+  return [
+    '너는 데스크톱 에이전트의 백그라운드 워커다. 위임받은 작업을 도구(파일, 셸, HTTP, MCP)로 끝까지 수행한다.',
+    `실행 환경: ${platform()} / 홈: ${homedir()}`,
+    '사소한 정보 부족은 합리적인 기본값으로 진행하고 보고에 밝혀라. 되돌리기 어려운 갈림길에서는 ask_user로 물어라.',
+    '도구 호출의 purpose에는 "왜 지금 필요한지"를 한 문장 써라. 비워두지 마라. 승인이 거부되면 다른 방법을 찾거나 중단하고 이유를 보고하라.',
+    '위에 정의된 도구만 호출하라. 없는 이름을 지어내지 마라.',
+    '',
+    '## 보고',
+    '- 마지막 응답이 결과 보고다. 결론을 첫 문단에 쓰고 근거는 그 뒤에 둔다.',
+    '- 실제로 실행한 명령과 그 출력만 근거로 삼아라. 확인하지 못한 값은 "확인 못함"이라고 적어라.',
+    '- 간결하게, 위임 지시와 같은 언어로 쓴다.'
+  ].join('\n')
+}
+
 function workerPrompt(): string {
   return [
     '너는 데스크톱 에이전트의 백그라운드 워커다. 메인 에이전트가 위임한 작업을 도구(파일, 셸, HTTP, MCP)로 끝까지 수행한다.',
@@ -118,9 +133,17 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
   let finalText = ''
 
   try {
-    const { model, config } = getModelFor(info.tier ?? 'standard')
-    const memoryContext = buildMemoryContext(instruction)
-    const system = memoryContext ? `${workerPrompt()}\n\n${memoryContext}` : workerPrompt()
+    const { model, config, profile } = getModelFor(info.tier ?? 'standard')
+    ctx.resultChars = profile.toolResultChars
+
+    const base = profile.local ? compactWorkerPrompt() : workerPrompt()
+    // 지식베이스는 남는 예산의 일부만 쓴다 — 지시와 도구 결과가 먼저다
+    const memoryBudget = profile.local
+      ? Math.max(0, Math.floor((profile.promptBudget - estimateTokens(base + instruction)) * 0.25))
+      : undefined
+    const memoryContext =
+      memoryBudget === 0 ? '' : buildMemoryContext(instruction, { budgetTokens: memoryBudget })
+    const system = memoryContext ? `${base}\n\n${memoryContext}` : base
 
     const clarify = clarifyTool({
       win,
@@ -146,7 +169,9 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
         ...integrationTools(win, info.sessionId),
         ...mcpTools
       },
-      stopWhen: stepCountIs(MAX_STEPS),
+      stopWhen: stepCountIs(profile.maxSteps),
+      ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
+      ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
       abortSignal: abort.signal
     })
 
@@ -200,6 +225,17 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
               : 'done'
           item.output = output.slice(0, 2000)
         }
+        emit(win, info)
+      } else if (part.type === 'tool-error') {
+        // 없는 도구 이름·스키마 불일치. SDK가 오류를 모델에 되돌려 주므로 작업은 이어지지만,
+        // 카드를 확정하지 않으면 '실행 중'으로 굳는다.
+        const message = part.error instanceof Error ? part.error.message : String(part.error)
+        const item = toolItems.get(part.toolCallId)
+        if (item) {
+          item.status = 'error'
+          item.output = message.slice(0, 2000)
+        }
+        ctx.failures.push({ kind: 'tool-error', detail: `${part.toolName} — ${message.slice(0, 200)}` })
         emit(win, info)
       } else if (part.type === 'error') {
         throw part.error instanceof Error ? part.error : new Error(String(part.error))

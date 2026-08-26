@@ -6,6 +6,7 @@ import type {
   MemoryType
 } from '@shared/types'
 import { readJson, writeJson } from '../storage/jsonStore'
+import { estimateTokens } from '../llm/profile'
 import { listSessions } from '../agent/sessions'
 
 function loadAll(): MemoryEntry[] {
@@ -189,13 +190,10 @@ export function pinnedMemories(): MemoryEntry[] {
 }
 
 /**
- * 토큰 수 추정. 한글은 글자당 약 0.85토큰, 그 외(영문/기호/공백)는 4자당 1토큰으로 잡는다.
- * 정확한 값이 아니라 "기억이 늘면 매 턴 비용이 는다"를 사용자에게 보여주기 위한 지표다.
+ * 토큰 수 추정 — 프롬프트 예산 계산과 같은 함수를 쓴다 (재노출).
+ * 화면에 보이는 "매 턴 주입량"이 에이전트가 실제로 적용하는 예산과 어긋나면 안 된다.
  */
-export function estimateTokens(text: string): number {
-  const hangul = (text.match(/[가-힣ᄀ-ᇿ㄰-㆏]/g) ?? []).length
-  return Math.ceil(hangul / 1.2 + (text.length - hangul) / 4)
-}
+export { estimateTokens }
 
 export function memoryStats(injectedBlock: string): MemoryStats {
   const all = loadAll()
