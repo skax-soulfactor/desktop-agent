@@ -3,6 +3,7 @@ import ChatView from './chat/ChatView'
 import ApprovalModal from './approval/ApprovalModal'
 import SettingsView from './settings/SettingsView'
 import MemoryView from './memory/MemoryView'
+import SkillsView from './skills/SkillsView'
 import SchedulesView from './schedules/SchedulesView'
 import NetworkView from './network/NetworkView'
 import UsageView from './usage/UsageView'
@@ -12,7 +13,7 @@ import ClarifyModal from './clarify/ClarifyModal'
 import SecretModal from './secrets/SecretModal'
 import NotifyHint from './NotifyHint'
 
-type Page = 'chat' | 'memory' | 'schedules' | 'network' | 'usage' | 'notifications' | 'settings'
+type Page = 'chat' | 'memory' | 'skills' | 'schedules' | 'network' | 'usage' | 'notifications' | 'settings'
 
 /** 탭 간 이동 요청. nonce는 같은 대상을 연속으로 요청해도 반응하게 하는 값 */
 interface Jump {
@@ -68,6 +69,9 @@ export default function App(): JSX.Element {
         <button className={page === 'memory' ? 'active' : ''} onClick={() => setPage('memory')}>
           지식베이스
         </button>
+        <button className={page === 'skills' ? 'active' : ''} onClick={() => setPage('skills')}>
+          스킬
+        </button>
         <button className={page === 'schedules' ? 'active' : ''} onClick={() => setPage('schedules')}>
           스케줄
         </button>
@@ -96,6 +100,7 @@ export default function App(): JSX.Element {
         {page === 'memory' && (
           <MemoryView focusId={jumpMemory?.id ?? null} onOpenSession={openSession} />
         )}
+        {page === 'skills' && <SkillsView />}
         {page === 'schedules' && <SchedulesView />}
         {page === 'network' && <NetworkView />}
         {page === 'usage' && <UsageView />}

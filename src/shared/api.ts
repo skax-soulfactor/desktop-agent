@@ -2,6 +2,7 @@ import type {
   AgentCard,
   ApprovalDecision,
   ApprovalRequest,
+  Skill,
   AttachmentPayload,
   AuditRecord,
   ChatEvent,
@@ -99,6 +100,11 @@ export interface DesktopAgentApi {
 
   /** 작업 결과(문서 분할 처리 결과 등)를 파일로 저장. 저장 경로 또는 취소 시 null */
   saveTaskResult(title: string, text: string): Promise<string | null>
+
+  // 스킬 — 반복 작업의 고정된 지시문
+  listSkills(includeArchived?: boolean): Promise<Skill[]>
+  saveSkill(skill: Partial<Skill> & Pick<Skill, 'name' | 'instruction' | 'mode'>): Promise<Skill>
+  deleteSkill(id: string): Promise<boolean>
 
   // 에이전트 네트워크
   netConfig(): Promise<NetworkConfig>

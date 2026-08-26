@@ -129,6 +129,30 @@ export interface TaskInfo {
   finishedAt?: string
 }
 
+/**
+ * 반복되는 작업을 이름 붙여 고정한 것.
+ *
+ * 같은 일을 시킬 때마다 모델이 지시문을 즉흥적으로 다시 쓰면 품질이 실행마다 달라진다.
+ * 한 번 다듬은 지시문을 저장해 두고 그대로 쓰기 위한 것이라, 본체는 instruction이다.
+ */
+export interface Skill {
+  id: string
+  name: string
+  /** 언제 쓰는 스킬인지 — 에이전트가 이 설명을 보고 고른다 */
+  description: string
+  /** 조각마다 그대로 적용할 지시문 */
+  instruction: string
+  mode: 'transform' | 'reduce'
+  tier?: ModelTier
+  /** auto=반복 사용이 관찰되어 앱이 만든 것, user=사용자가 직접 만든 것 */
+  source: 'auto' | 'user'
+  status: 'active' | 'archived'
+  useCount: number
+  lastUsedAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface MemoryOpSummary {
   op: 'create' | 'update' | 'archive'
   type: MemoryType

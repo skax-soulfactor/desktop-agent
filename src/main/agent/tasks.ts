@@ -15,6 +15,7 @@ import { clarifyTool } from './clarify'
 import { integrationTools } from '../integrations/tools'
 import { mcpToolsFor } from '../mcp/manager'
 import { getDocument, runDocumentJob } from './documents'
+import { recordRun } from '../skills/store'
 
 interface Task {
   info: TaskInfo
@@ -110,6 +111,19 @@ export function startDocumentTask(
       })
       info.usage = { input: result.inputTokens, output: result.outputTokens }
       addSessionUsage(sessionId, result.inputTokens, result.outputTokens)
+
+      // 같은 작업이 반복되면 스킬로 굳힌다. 판단 근거는 모델의 추측이 아니라 실제 사용 이력이다.
+      // 대부분 조각이 처리되지 않은 실행은 본보기로 삼을 수 없으므로 제외한다.
+      const mostlyProcessed = result.unchanged <= Math.floor(result.chunks / 2)
+      const promoted = mostlyProcessed ? recordRun(instruction, mode) : null
+      if (promoted?.created) {
+        const text =
+          `반복해서 쓰신 작업이라 스킬 "${promoted.skill.name}"로 저장했습니다. ` +
+          '스킬 탭에서 지시문을 직접 다듬거나 삭제할 수 있습니다.'
+        appendToSession(sessionId, [{ kind: 'notice', text }], [])
+        if (!win.isDestroyed()) win.webContents.send('chat:event', { sessionId, type: 'notice', text })
+      }
+
       finishTask(
         win,
         info,

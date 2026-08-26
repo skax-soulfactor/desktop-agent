@@ -34,7 +34,8 @@ import {
   importMemories
 } from './memory/store'
 import { buildMemoryContext } from './memory/recall'
-import type { MemoryBulkAction, MemoryEntry } from '@shared/types'
+import { createSkill, deleteSkill, listSkills, updateSkill } from './skills/store'
+import type { MemoryBulkAction, MemoryEntry, Skill } from '@shared/types'
 import type { AgentCard, NetworkConfig, PeerPolicy } from '@shared/types'
 import {
   getNetworkConfig,
@@ -164,6 +165,23 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     writeFileSync(filePath, body, 'utf-8')
     return filePath
   })
+  ipcMain.handle('skill:list', (_e, includeArchived?: boolean) => listSkills(includeArchived))
+  ipcMain.handle('skill:save', (_e, skill: Partial<Skill> & Pick<Skill, 'name' | 'instruction' | 'mode'>) => {
+    if (skill.id) {
+      const updated = updateSkill(skill.id, skill)
+      if (updated) return updated
+    }
+    return createSkill({
+      name: skill.name,
+      description: skill.description ?? '',
+      instruction: skill.instruction,
+      mode: skill.mode,
+      tier: skill.tier,
+      source: 'user'
+    })
+  })
+  ipcMain.handle('skill:delete', (_e, id: string) => deleteSkill(id))
+
   // 분할 처리 결과처럼 대화에 담기엔 큰 산출물을 사용자가 파일로 가져갈 수 있게 한다
   ipcMain.handle('task:saveResult', async (_e, title: string, text: string) => {
     const safe = title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 60).trim() || 'result'

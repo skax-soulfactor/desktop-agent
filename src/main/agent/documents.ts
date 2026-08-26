@@ -7,6 +7,7 @@ import { estimateTokens, type ModelProfile } from '../llm/profile'
 import { resolveModelFor } from '../llm/providers'
 import { describeError } from '../llm/errors'
 import { recordUsage } from '../usage/store'
+import { resolveSkill } from '../skills/store'
 
 /**
  * 모델 창보다 큰 첨부를 다루기 위한 문서 저장소와 분할 처리 파이프라인.
@@ -283,8 +284,15 @@ export function documentTools(
         '직접 하려 하지 말고 반드시 이 도구를 사용하라. 백그라운드로 진행되며 완료되면 결과가 전달된다.',
       inputSchema: z.object({
         documentId: z.string().describe('첨부 표시에 적힌 documentId'),
+        skillId: z
+          .string()
+          .optional()
+          .describe(
+            '저장된 스킬을 쓸 때 그 skillId. 주면 스킬의 지시문과 방식이 그대로 쓰이고 instruction/mode는 무시된다'
+          ),
         instruction: z
           .string()
+          .optional()
           .describe('각 조각에 그대로 적용할 지시 (예: "한국어로 번역하라"). 조각 번호나 문서 이름은 넣지 마라'),
         mode: z
           .enum(['transform', 'reduce'])
@@ -294,13 +302,26 @@ export function documentTools(
               '생략하면 지시 내용을 보고 자동으로 고른다'
           )
       }),
-      execute: async ({ documentId, instruction, mode }) => {
+      execute: async ({ documentId, skillId, instruction, mode }) => {
         const doc = getDocument(documentId)
         if (!doc) return { error: `documentId ${documentId}에 해당하는 문서가 없습니다.` }
         if (doc.sessionId !== sessionId) return { error: '다른 대화의 문서입니다.' }
+
+        // 스킬을 지정하면 다듬어 둔 지시문을 그대로 쓴다 — 매번 새로 쓰면 품질이 흔들린다
+        const skill = skillId ? resolveSkill(skillId) : undefined
+        if (skillId && !skill) return { error: `skillId ${skillId}에 해당하는 스킬이 없습니다.` }
+        const finalInstruction = skill?.instruction ?? instruction
+        if (!finalInstruction) return { error: 'skillId 또는 instruction 중 하나는 필요합니다.' }
+        const finalMode = skill?.mode ?? mode ?? inferMode(finalInstruction)
+
         try {
-          const info = start(documentId, instruction, mode ?? inferMode(instruction))
-          return { taskId: info.id, status: info.status, documentTokens: doc.tokens }
+          const info = start(documentId, finalInstruction, finalMode)
+          return {
+            taskId: info.id,
+            status: info.status,
+            documentTokens: doc.tokens,
+            ...(skill ? { usedSkill: skill.name } : {})
+          }
         } catch (e) {
           return { error: describeError(e) }
         }

@@ -4,6 +4,7 @@ import type { BrowserWindow } from 'electron'
 import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
 import { buildAttachmentParts, buildUserContent } from './attachments'
 import { documentTools, registerDocument } from './documents'
+import { buildSkillContext } from '../skills/store'
 import { resolveModelFor, type ResolvedModel } from '../llm/providers'
 import { estimateTokens, fitToTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
@@ -147,6 +148,9 @@ function fullSystemPrompt(): string[] {
 
 function baseSystemPrompt(sessionId: string, profile: ModelProfile): string {
   const lines = profile.local ? compactSystemPrompt() : fullSystemPrompt()
+
+  const skillCtx = buildSkillContext()
+  if (skillCtx) lines.push('', skillCtx)
 
   const peerCtx = buildPeerContext()
   if (peerCtx) lines.push('', peerCtx)
