@@ -155,6 +155,8 @@ export interface DesktopAgentApi {
   getAppVersion(): Promise<string>
   updateStatus(): Promise<UpdateStatus>
   checkForUpdates(): Promise<UpdateStatus>
+  /** 사용자가 선택했을 때만 새 버전을 내려받는다 */
+  downloadUpdate(): Promise<UpdateStatus>
   installUpdate(): Promise<void>
   onUpdateStatus(cb: (s: UpdateStatus) => void): () => void
 }

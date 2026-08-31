@@ -190,6 +190,7 @@ const api: DesktopAgentApi = {
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
   updateStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:status'),
   checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:check'),
+  downloadUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:download'),
   installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
   onUpdateStatus: (cb: (s: UpdateStatus) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, s: UpdateStatus): void => cb(s)

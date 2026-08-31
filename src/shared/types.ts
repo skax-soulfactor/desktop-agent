@@ -179,7 +179,7 @@ export type ChatEvent =
 export type UpdateStatus =
   | { state: 'idle' }
   | { state: 'checking' }
-  /** 새 버전 발견 — 곧 다운로드가 시작된다 */
+  /** 새 버전 발견 — 내려받을지는 사용자가 결정한다 (자동으로 받지 않는다) */
   | { state: 'available'; version: string }
   /** 이미 최신 (version = 현재 버전) */
   | { state: 'not-available'; version: string }
