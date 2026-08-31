@@ -33,8 +33,21 @@ export function isHardBlocked(command: string): boolean {
 const ELEVATION_ATTEMPT =
   /(^|[\s;&|(){}'"`$=])(sudo|doas|pkexec|runas|su)(\s|$)|Start-Process[^|]*-Verb\s+RunAs|with\s+administrator\s+privileges/i
 
+/**
+ * 인용 분할 우회를 지운다. 셸은 `su''do`·`s\udo`·`"sud"o`를 모두 sudo로 이어붙이지만
+ * 정규식은 리터럴을 보므로 그냥 통과한다 — 실제로 에이전트가 차단당한 뒤 이 방법을 찾아
+ * 스스로 우회했다(감사 로그에 남아 있다). 따옴표와 백슬래시를 지우고 한 번 더 보면
+ * 이 계열이 한꺼번에 잡힌다.
+ *
+ * 변수 조립(`X=su; Y=do; $X$Y id`)까지는 문자열 검사로 막을 수 없다. 그건 shell_exec을
+ * no_new_privs 아래에서 실행하는 쪽(tools/shell.ts)이 커널 수준에서 막는다.
+ */
+function stripQuoting(command: string): string {
+  return command.replace(/['"\\]/g, '')
+}
+
 export function isElevationAttempt(command: string): boolean {
-  return ELEVATION_ATTEMPT.test(command)
+  return ELEVATION_ATTEMPT.test(command) || ELEVATION_ATTEMPT.test(stripQuoting(command))
 }
 
 interface PendingApproval {
@@ -198,7 +211,9 @@ export async function checkPermission(win: BrowserWindow, g: GateInput): Promise
       g,
       'blocked',
       'shell_exec으로는 권한을 상승시킬 수 없습니다(sudo/su/pkexec/runas 차단). ' +
-        '관리자 권한이 꼭 필요하면 shell_exec_elevated 도구로 요청하라 — ' +
+        '명령 문자열 전체를 보므로, 파일에 써 넣을 내용에 그 단어가 들어 있어도 걸린다 — ' +
+        '그런 경우라면 리다이렉션(>) 대신 fs_write로 파일을 써라. ' +
+        '실제로 관리자 권한이 필요한 것이면 shell_exec_elevated 도구로 요청하라 — ' +
         '사용자가 그 자리에서 승인하고 OS 인증 창에 직접 비밀번호를 입력하게 된다.'
     )
   }
