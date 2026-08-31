@@ -2,6 +2,7 @@ import { minimatch } from 'minimatch'
 import { homedir } from 'os'
 import type { PermissionRule } from '@shared/types'
 import { readJson, writeJson } from '../storage/jsonStore'
+import { ELEVATED_TOOL_NAME } from './elevation'
 
 /** 세션 규칙은 메모리에만, 영구 규칙은 rules.json에 저장 */
 let sessionRules: PermissionRule[] = []
@@ -19,6 +20,11 @@ export function listRules(): PermissionRule[] {
 }
 
 export function addRule(rule: Omit<PermissionRule, 'id' | 'createdAt'>): void {
+  // 상승 실행은 어떤 경로로도 미리 허용해 둘 수 없다 — 매번 사람이 그 자리에서 승인해야 한다.
+  // 차단 규칙은 막을 이유가 없으므로 허용 규칙만 거부한다.
+  if (rule.toolName === ELEVATED_TOOL_NAME && rule.action === 'allow') {
+    throw new Error('관리자 권한 실행은 허용 규칙으로 저장할 수 없습니다. 매번 승인이 필요합니다.')
+  }
   const full: PermissionRule = { ...rule, id: crypto.randomUUID(), createdAt: new Date().toISOString() }
   if (rule.scope === 'session') {
     sessionRules.push(full)

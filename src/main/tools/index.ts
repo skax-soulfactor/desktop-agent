@@ -4,12 +4,21 @@ import type { BrowserWindow } from 'electron'
 import type { DesktopToolDef } from './defs'
 import { fsRead, fsWrite, fsList } from './fs'
 import { shellExec } from './shell'
+import { shellExecElevated } from './elevated'
 import { httpRequest } from './http'
 import { checkPermission } from '../permissions/gateway'
+import { isElevationEnabled } from '../permissions/elevation'
 import { registerDocument } from '../agent/documents'
 import type { FailureSignal } from '../memory/extract'
 
-export const allToolDefs: DesktopToolDef[] = [fsRead, fsWrite, fsList, shellExec, httpRequest]
+export const allToolDefs: DesktopToolDef[] = [
+  fsRead,
+  fsWrite,
+  fsList,
+  shellExec,
+  shellExecElevated,
+  httpRequest
+]
 
 export function toolDefByName(name: string): DesktopToolDef | undefined {
   return allToolDefs.find((d) => d.name === name)
@@ -25,6 +34,11 @@ export interface TurnContext {
    * 로컬 모델에서는 결과 한 건이 대화 전체를 창 밖으로 밀어낸다.
    */
   resultChars?: number
+  /**
+   * 사람이 지켜보지 않는 경로(예약 실행·피어 위임)에서 도는 턴인가.
+   * 참이면 상승 도구가 아예 노출되지 않고, 뚫고 들어와도 게이트웨이에서 거부된다.
+   */
+  unattended?: boolean
 }
 
 /**
@@ -121,7 +135,11 @@ function withPurpose(schema: z.ZodTypeAny): z.ZodTypeAny {
  */
 export function buildTools(ctx: TurnContext, only?: string[]): ToolSet {
   const tools: ToolSet = {}
-  const defs = only ? allToolDefs.filter((d) => only.includes(d.name)) : allToolDefs
+  const defs = allToolDefs
+    .filter((d) => !only || only.includes(d.name))
+    // 상승 도구는 기능이 켜져 있고 사람이 지켜보는 턴에서만 모델에게 보인다.
+    // 정의가 아예 없으면 모델이 그 길을 떠올릴 수도 없다 (게이트웨이 차단은 그다음 방어선).
+    .filter((d) => d.risk !== 'elevate' || (isElevationEnabled() && !ctx.unattended))
   for (const def of defs) {
     tools[def.name] = tool({
       description: def.description,
@@ -131,15 +149,28 @@ export function buildTools(ctx: TurnContext, only?: string[]): ToolSet {
         const { purpose, ...rest } = (raw ?? {}) as Record<string, unknown>
         const input = rest
         const summary = def.describeCall(input)
+        // 승인 화면에 보여줄 값을 만드는 단계 — 여기서 실패하면 사용자를 부르기 전에 돌려보낸다
+        let argv: string[] | undefined
+        let target = ''
+        try {
+          argv = def.argvOf?.(input)
+          target = def.targetOf(input)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          ctx.failures.push({ kind: 'tool-error', detail: `${summary} — ${msg}` })
+          return { error: msg }
+        }
         const gate = await checkPermission(ctx.win, {
           sessionId: ctx.sessionId,
           toolName: def.name,
           risk: def.risk,
           summary,
-          target: def.targetOf(input),
+          target,
           suggestedPattern: def.suggestedPattern(input),
           inputJson: JSON.stringify(input, null, 2),
-          purpose: typeof purpose === 'string' && purpose.trim() ? purpose.trim() : undefined
+          purpose: typeof purpose === 'string' && purpose.trim() ? purpose.trim() : undefined,
+          unattended: ctx.unattended,
+          argv
         })
         if (!gate.allowed) {
           ctx.failures.push({ kind: 'approval-denied', detail: `${summary} — ${gate.reason}` })

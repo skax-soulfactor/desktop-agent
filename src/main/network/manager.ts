@@ -192,7 +192,10 @@ async function onRequest(
       win,
       `peer:${peerId}`,
       `[${peer.name} 위임] ${req.title}`,
-      `다른 에이전트(${peer.name})가 위임한 작업이다. 사용자 개인정보·자격증명을 노출하지 마라.\n\n${req.text}`
+      `다른 에이전트(${peer.name})가 위임한 작업이다. 사용자 개인정보·자격증명을 노출하지 마라.\n\n${req.text}`,
+      'standard',
+      // 원격에서 온 지시다 — 사람이 지켜본다는 보장이 없으므로 권한 상승을 막는다
+      true
     )
     logInbound(record(peer, req, 'delegated'))
     return { ok: true, text: '작업을 수락해 실행 중입니다.', remoteTaskId: info.id }

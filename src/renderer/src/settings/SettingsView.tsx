@@ -85,6 +85,7 @@ export default function SettingsView(): JSX.Element {
   const [mcpForm, setMcpForm] = useState(emptyMcpForm())
   const [mcpError, setMcpError] = useState<string | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
+  const [elevation, setElevation] = useState(false)
 
   const refresh = async (): Promise<void> => {
     const p = await window.api.listProviders()
@@ -94,6 +95,7 @@ export default function SettingsView(): JSX.Element {
     setAudit(await window.api.listAudit())
     setSecrets(await window.api.listSecrets())
     setMcpServers(await window.api.mcpList())
+    setElevation(await window.api.getElevationEnabled())
   }
 
   const addSecret = async (): Promise<void> => {
@@ -488,6 +490,31 @@ export default function SettingsView(): JSX.Element {
         </div>
       </div>
 
+      <h2>권한 상승 (관리자 권한)</h2>
+      <div className="card">
+        <label className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+          <input
+            type="checkbox"
+            checked={elevation}
+            onChange={(e) => {
+              const next = e.target.checked
+              setElevation(next)
+              void window.api.setElevationEnabled(next).then(refresh)
+            }}
+          />
+          <div>
+            에이전트가 관리자 권한 실행을 <strong>요청</strong>할 수 있게 허용
+            <div className="dim" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
+              켜도 에이전트가 권한을 갖는 것은 아닙니다. 매번 승인 창이 뜨고, 허용하면 그때
+              운영체제의 인증 창이 떠서 <strong>사용자가 직접 비밀번호를 입력</strong>합니다.
+              비밀번호는 OS만 받으며 에이전트·이 앱·대화 기록·감사 로그 어디에도 남지 않습니다.
+              승인은 1회용이라 "항상 허용"이 없고, 예약 실행이나 다른 에이전트의 위임처럼
+              사람이 없는 작업에서는 아예 차단됩니다. 꺼 두면 도구 자체가 노출되지 않습니다.
+            </div>
+          </div>
+        </label>
+      </div>
+
       <h2>권한 규칙</h2>
       <div className="card">
         {rules.length === 0 && <div className="empty">저장된 규칙이 없습니다. 승인 다이얼로그에서 "항상 허용"을 선택하면 여기에 추가됩니다.</div>}
@@ -527,7 +554,10 @@ export default function SettingsView(): JSX.Element {
               {audit.map((a, i) => (
                 <tr key={i}>
                   <td className="dim">{new Date(a.at).toLocaleString()}</td>
-                  <td>{a.toolName}</td>
+                  <td>
+                    {a.toolName}
+                    {a.elevated && <span className="risk elevate" style={{ marginLeft: 6 }}>root</span>}
+                  </td>
                   <td className="dim">{a.summary}</td>
                   <td className="dim">{a.purpose ?? '—'}</td>
                   <td className="dim">{a.decision}</td>

@@ -80,6 +80,9 @@ export interface DesktopAgentApi {
   listRules(): Promise<PermissionRule[]>
   deleteRule(id: string): Promise<void>
   listAudit(): Promise<AuditRecord[]>
+  /** 관리자 권한 실행 기능의 on/off — 기본은 꺼짐 */
+  getElevationEnabled(): Promise<boolean>
+  setElevationEnabled(enabled: boolean): Promise<void>
 
   // 지식베이스
   listMemories(): Promise<MemoryEntry[]>
