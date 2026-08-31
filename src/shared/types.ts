@@ -1,4 +1,5 @@
-export type RiskLevel = 'read' | 'write' | 'execute'
+/** elevate = 관리자 권한 실행. 규칙으로 저장할 수 없고 매번 사용자가 그 자리에서 승인해야 한다 */
+export type RiskLevel = 'read' | 'write' | 'execute' | 'elevate'
 
 export type ProviderType = 'anthropic' | 'openai' | 'google' | 'ollama' | 'openai-compatible'
 
@@ -127,6 +128,8 @@ export interface TaskInfo {
   usage?: TokenUsage
   createdAt: string
   finishedAt?: string
+  /** 사람이 지켜보지 않는 경로(스케줄·피어 위임)에서 시작된 작업 — 권한 상승이 금지된다 */
+  unattended?: boolean
 }
 
 /**
@@ -197,6 +200,10 @@ export interface ApprovalRequest {
   lessons: string[]
   /** 에이전트가 밝힌 요청 목적 — 이 실행이 왜 필요한지 (미기재일 수 있다) */
   purpose?: string
+  /** 관리자 권한 실행 요청 — 승인해도 규칙으로 저장되지 않고, 비밀번호는 OS가 직접 받는다 */
+  elevate?: boolean
+  /** elevate일 때 root로 실행될 인자 배열. 화면에 보이는 각 줄이 실제 인자와 1:1 대응한다 */
+  argv?: string[]
 }
 
 export interface ApprovalDecision {
@@ -298,10 +305,21 @@ export interface AuditRecord {
   sessionId: string
   toolName: string
   summary: string
-  decision: 'allowed-by-rule' | 'allowed-by-user' | 'denied-by-rule' | 'denied-by-user' | 'blocked'
+  decision:
+    | 'allowed-by-rule'
+    | 'allowed-by-user'
+    | 'denied-by-rule'
+    | 'denied-by-user'
+    | 'blocked'
+    /** 상승 요청이 사람 없는 실행(스케줄·피어 위임)이나 숨겨진 창에서 올라와 거부됨 */
+    | 'blocked-unattended'
   result: 'ok' | 'error' | 'denied'
   /** 에이전트가 밝힌 요청 목적 — 나중에 감사 기록에서 왜 실행했는지 추적할 수 있게 남긴다 */
   purpose?: string
+  /** 관리자 권한으로 실행(요청)되었는가 */
+  elevated?: boolean
+  /** 상승 실행의 실제 인자 배열 — 비밀번호는 이 경로를 지나지 않으므로 그대로 남긴다 */
+  argv?: string[]
 }
 
 // ─────────────────────────── 에이전트 네트워크 (A2A) ───────────────────────────

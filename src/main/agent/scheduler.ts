@@ -106,7 +106,8 @@ export function startScheduler(getWin: () => BrowserWindow | null): void {
         s.nextRunAt = computeNext(s, now) ?? s.nextRunAt
       }
       try {
-        startTask(win, s.sessionId, `[스케줄] ${s.title}`, s.instruction, s.tier ?? 'standard')
+        // 예약 실행에는 사람이 없다 — 권한 상승 도구가 노출되지 않는다
+        startTask(win, s.sessionId, `[스케줄] ${s.title}`, s.instruction, s.tier ?? 'standard', true)
       } catch (e) {
         appendToSession(
           s.sessionId,

@@ -9,6 +9,7 @@ import { resolveModelFor, type ResolvedModel } from '../llm/providers'
 import { estimateTokens, fitToTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
 import { buildTools, toolDefByName, PURPOSE_DESCRIPTION, type TurnContext } from '../tools'
+import { isElevationEnabled } from '../permissions/elevation'
 import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
 import { getSession, saveSession, appendToSession, addSessionUsage } from './sessions'
@@ -24,7 +25,7 @@ import { integrationTools } from '../integrations/tools'
  * 확인만 하면 되는 일까지 위임하면 대화가 "잠시만요"로 파편화되므로,
  * 즉시 끝나는 조회는 직접 하게 한다. shell_exec도 승인 게이트를 그대로 거친다.
  */
-const MAIN_AGENT_TOOLS = ['fs_read', 'fs_list', 'shell_exec']
+const MAIN_AGENT_TOOLS = ['fs_read', 'fs_list', 'shell_exec', 'shell_exec_elevated']
 
 const activeTurns = new Map<string, AbortController>()
 
@@ -79,9 +80,21 @@ function compactSystemPrompt(): string[] {
     '  무엇을 왜 시작했는지 한 줄로 알린 뒤 턴을 끝내라. 완료를 기다리지 마라.',
     '- 도구 호출의 purpose에는 "왜 지금 필요한지"를 사용자의 언어로 한 문장 써라. 비워두지 마라.',
     '- 위에 정의된 도구만 호출하라. 없는 이름(systeminfo 등)을 지어내지 마라. 셸 명령은 shell_exec의 command 인자로 넣는다.',
+    elevationRule(),
     '- 앞으로 계속 쓰일 정보(선호, 규칙, 저장 위치)는 save_memory로 저장하라.',
     '- "[작업 알림"으로 시작하는 메시지는 시스템이 보낸 작업 상태 알림이다. 사용자 발언으로 취급하지 마라.'
   ]
+}
+
+/**
+ * 권한 상승에 대해 모델에게 알려 줄 한 줄.
+ * 기능이 꺼져 있으면 도구 정의 자체가 노출되지 않으므로 이름을 알려 주지 않는다 —
+ * 없는 도구 이름을 프롬프트에 두면 모델이 그것을 부르려 든다.
+ */
+function elevationRule(): string {
+  return isElevationEnabled()
+    ? '- 관리자(root) 권한이 필요하면 sudo·su·pkexec를 쓰지 마라(shell_exec에서 차단된다). shell_exec_elevated를 호출하면 사용자가 승인 후 OS 인증 창에 직접 비밀번호를 넣는다. 매번 승인이 필요하니 꼭 필요한 것만 한 번에 하나씩 요청하고, 예약 실행·피어 위임 작업에서는 쓸 수 없으니 그럴 땐 실행하지 말고 사용자에게 보고하라.'
+    : '- 관리자(root) 권한이 필요한 명령은 실행할 수 없다(sudo는 차단된다). 필요하면 사용자에게 터미널에서 직접 실행하도록 안내하라.'
 }
 
 /** 클라우드 모델용 전체 프롬프트 */
@@ -109,6 +122,7 @@ function fullSystemPrompt(): string[] {
     '- 즉시 끝나는 조회(파일 읽기, 디렉토리·타임스탬프 확인, 상태 조회 명령 등)는 직접 하고 그 자리에서 답하라. 이런 걸 위임하면 대화만 끊긴다.',
     '- 파일 생성·수정, 설치·빌드·배포처럼 부수효과가 있거나 오래 걸리는 작업, 여러 단계가 필요한 작업은 delegate_task로 백그라운드 서브 에이전트에 위임하라.',
     '- 직접 실행하는 shell_exec는 읽기 전용 확인에만 써라. 파일을 바꾸거나 시스템 상태를 바꾸는 명령은 위임하라.',
+    elevationRule(),
     '- 위임 지시(instruction)는 서브 에이전트가 단독으로 수행할 수 있게 자기완결적으로 작성하라.',
     '- 위임할 때 작업 난이도에 맞는 모델 등급(tier)을 지정하라: 단순 수집·정리·반복 작업은 "light", 일반 작업은 "standard", 복잡한 분석·코드 작성·중요 문서 작성은 "advanced". 사용자가 명시적으로 등급이나 품질을 요구하면 그것을 따르라.',
     '- 위임 직후 사용자에게 무엇을 왜 시작했는지, 그리고 결과로 무엇이 갈리는지 짧게 알리고 턴을 끝내라. 작업 완료를 기다리지 마라.',

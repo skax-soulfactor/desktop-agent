@@ -55,7 +55,9 @@ export function startTask(
   sessionId: string,
   title: string,
   instruction: string,
-  tier: ModelTier = 'standard'
+  tier: ModelTier = 'standard',
+  /** 사람이 지켜보지 않는 경로(예약 실행·피어 위임)에서 시작한 작업이면 참 — 권한 상승이 금지된다 */
+  unattended = false
 ): TaskInfo {
   // 시작 전에 프로바이더 설정 오류를 조기에 드러낸다
   getModelFor(tier)
@@ -66,7 +68,8 @@ export function startTask(
     title,
     status: 'running',
     tier,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    unattended
   }
   tasks.set(info.id, { info, abort: new AbortController() })
   emit(win, info)
@@ -194,7 +197,12 @@ async function runTask(win: BrowserWindow, taskId: string, instruction: string):
   const t = tasks.get(taskId)
   if (!t) return
   const { info, abort } = t
-  const ctx: TurnContext = { sessionId: info.sessionId, win, failures: [] }
+  const ctx: TurnContext = {
+    sessionId: info.sessionId,
+    win,
+    failures: [],
+    unattended: info.unattended
+  }
 
   // 워커 활동 로그 — 메인 에이전트 대화처럼 텍스트 블록과 도구 카드가 순서대로 쌓인다
   const log: ChatItem[] = []
