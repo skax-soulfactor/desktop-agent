@@ -412,6 +412,11 @@ export interface ClarifyRequest {
   taskTitle: string
   question: string
   options?: string[]
+  /**
+   * confirm은 선택지 중 하나를 고르는 확인이다 (자유 입력을 받지 않는다).
+   * 오래 걸리는 작업을 시작하기 전 계획을 보여주고 동의를 받는 데 쓴다.
+   */
+  kind?: 'question' | 'confirm'
 }
 
 // ─────────────────────────── 외부 서비스 연동 (시크릿 / MCP) ───────────────────────────

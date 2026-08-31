@@ -76,6 +76,10 @@ function compactSystemPrompt(): string[] {
     '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
     '- 파일 읽기·목록 확인·상태 조회는 fs_read/fs_list/shell_exec로 직접 실행하고 그 자리에서 답하라.',
     '  "실행해도 될까요?"라고 되묻지 마라 — 승인 창은 앱이 자동으로 띄운다.',
+    '- 출력이 클 것 같은 조회는 명령 자체에서 정렬·필터·개수 제한을 걸어라.',
+    '  예: 메모리 상위 20개는 tasklist 전체를 받지 말고 `Get-Process | Sort-Object WS -Descending | Select-Object -First 20 Name,WS`.',
+    '  전부 받아 process_document로 나누는 것은 명령으로 줄일 수 없을 때만 쓴다 — 조각은 서로를 못 보므로',
+    '  "상위 N개" 같은 전체 기준 작업은 나누면 조각마다 기준이 달라져 답이 틀린다.',
     '- 파일 수정·설치·빌드처럼 부수효과가 있거나 오래 걸리는 일은 delegate_task로 위임하고,',
     '  무엇을 왜 시작했는지 한 줄로 알린 뒤 턴을 끝내라. 완료를 기다리지 마라.',
     '- 도구 호출의 purpose에는 "왜 지금 필요한지"를 사용자의 언어로 한 문장 써라. 비워두지 마라.',
@@ -122,6 +126,8 @@ function fullSystemPrompt(): string[] {
     '- 즉시 끝나는 조회(파일 읽기, 디렉토리·타임스탬프 확인, 상태 조회 명령 등)는 직접 하고 그 자리에서 답하라. 이런 걸 위임하면 대화만 끊긴다.',
     '- 파일 생성·수정, 설치·빌드·배포처럼 부수효과가 있거나 오래 걸리는 작업, 여러 단계가 필요한 작업은 delegate_task로 백그라운드 서브 에이전트에 위임하라.',
     '- 직접 실행하는 shell_exec는 읽기 전용 확인에만 써라. 파일을 바꾸거나 시스템 상태를 바꾸는 명령은 위임하라.',
+    '- 출력이 클 것 같은 조회는 명령 자체에서 정렬·필터·개수 제한을 걸어라(예: `Get-Process | Sort-Object WS -Descending | Select-Object -First 20`). ' +
+      '전부 받아 process_document로 나누는 것은 명령으로 줄일 수 없을 때만 쓴다 — 조각은 서로를 볼 수 없어 "상위 N개"처럼 전체를 기준으로 하는 작업은 나누면 답이 틀린다.',
     elevationRule(),
     '- 위임 지시(instruction)는 서브 에이전트가 단독으로 수행할 수 있게 자기완결적으로 작성하라.',
     '- 위임할 때 작업 난이도에 맞는 모델 등급(tier)을 지정하라: 단순 수집·정리·반복 작업은 "light", 일반 작업은 "standard", 복잡한 분석·코드 작성·중요 문서 작성은 "advanced". 사용자가 명시적으로 등급이나 품질을 요구하면 그것을 따르라.',
@@ -408,8 +414,8 @@ export async function runTurn(
       ...memoryTools(win, sessionId),
       ...peerTools(),
       ...integrationTools(win, sessionId),
-      ...documentTools(sessionId, (documentId, instruction, mode) =>
-        startDocumentTask(win, sessionId, documentId, instruction, mode)
+      ...documentTools(win, sessionId, (documentId, instruction, mode, plan) =>
+        startDocumentTask(win, sessionId, documentId, instruction, mode, plan)
       )
     }
     const toolTokens = estimateToolTokens(tools)

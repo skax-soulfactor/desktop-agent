@@ -27,6 +27,44 @@ export function pendingClarifications(): ClarifyRequest[] {
 const openRequests: ClarifyRequest[] = []
 const TIMEOUT_MS = 30 * 60 * 1000
 
+/**
+ * 오래 걸리는 작업을 시작하기 전에 계획을 보여주고 동의를 받는다.
+ *
+ * ask_user와 같은 대기 구조를 쓰되 자유 입력 없이 선택지만 받는다. 창이 닫혀 있거나
+ * 시간 안에 답이 없으면 진행하지 않는다 — 되묻는 이유가 "오래 걸려서"인데
+ * 답을 못 받았다고 그냥 시작해 버리면 확인의 의미가 없다.
+ */
+export async function askUserConfirm(
+  win: BrowserWindow,
+  input: { title: string; message: string; options: string[] }
+): Promise<string | null> {
+  if (win.isDestroyed()) return null
+  const req: ClarifyRequest = {
+    requestId: crypto.randomUUID(),
+    taskId: '',
+    taskTitle: input.title,
+    question: input.message,
+    options: input.options,
+    kind: 'confirm'
+  }
+  return new Promise<string | null>((resolve) => {
+    const finish = (val: string | null): void => {
+      clearTimeout(timer)
+      pending.delete(req.requestId)
+      const idx = openRequests.findIndex((r) => r.requestId === req.requestId)
+      if (idx >= 0) openRequests.splice(idx, 1)
+      resolve(val)
+    }
+    const timer = setTimeout(() => finish(null), TIMEOUT_MS)
+    pending.set(req.requestId, { resolve: finish, timer })
+    openRequests.push(req)
+    win.webContents.send('clarify:request', req)
+    notifyIfBackground(win, `확인 필요: ${input.title}`, input.message.slice(0, 200), {
+      kind: 'question'
+    })
+  })
+}
+
 export interface ClarifyContext {
   win: BrowserWindow
   taskId: string
