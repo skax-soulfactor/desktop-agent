@@ -92,6 +92,9 @@ const api: DesktopAgentApi = {
   listRules: (): Promise<PermissionRule[]> => ipcRenderer.invoke('rules:list'),
   deleteRule: (id: string): Promise<void> => ipcRenderer.invoke('rules:delete', id),
   listAudit: (): Promise<AuditRecord[]> => ipcRenderer.invoke('audit:list'),
+  getElevationEnabled: (): Promise<boolean> => ipcRenderer.invoke('elevation:get'),
+  setElevationEnabled: (enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke('elevation:set', enabled),
 
   listMemories: (): Promise<MemoryEntry[]> => ipcRenderer.invoke('memory:list'),
   createMemory: (

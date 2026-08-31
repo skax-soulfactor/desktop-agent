@@ -19,7 +19,8 @@ export const shellExec: DesktopToolDef<
 > = {
   name: 'shell_exec',
   description:
-    '셸 명령을 실행한다. cwd 미지정 시 홈 디렉토리에서 실행. 타임아웃 120초, 인터랙티브 명령 불가.',
+    '셸 명령을 실행한다. cwd 미지정 시 홈 디렉토리에서 실행. 타임아웃 120초, 인터랙티브 명령 불가. ' +
+    'sudo·su·pkexec·runas 등 권한 상승은 이 도구로 할 수 없다(차단됨) — shell_exec_elevated를 쓴다.',
   risk: 'execute',
   inputSchema: z.object({
     command: z.string(),

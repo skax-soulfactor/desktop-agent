@@ -16,6 +16,7 @@ import {
 import { respondToApproval } from './permissions/gateway'
 import { listRules, deleteRule } from './permissions/policies'
 import { listAudit } from './permissions/audit'
+import { isElevationEnabled, setElevationEnabled } from './permissions/elevation'
 import { listProviders, saveProvider, deleteProvider, setTier } from './llm/providers'
 import type { ModelTier } from '@shared/types'
 import {
@@ -120,6 +121,8 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   ipcMain.handle('rules:list', () => listRules())
   ipcMain.handle('rules:delete', (_e, id: string) => deleteRule(id))
   ipcMain.handle('audit:list', () => listAudit(100))
+  ipcMain.handle('elevation:get', () => isElevationEnabled())
+  ipcMain.handle('elevation:set', (_e, enabled: boolean) => setElevationEnabled(enabled === true))
 
   // 지식베이스
   ipcMain.handle('memory:list', () => listMemories(true))
