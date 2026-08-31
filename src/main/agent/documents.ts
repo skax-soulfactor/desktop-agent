@@ -8,6 +8,8 @@ import { resolveModelFor } from '../llm/providers'
 import { describeError } from '../llm/errors'
 import { recordUsage } from '../usage/store'
 import { resolveSkill } from '../skills/store'
+import { askUserConfirm } from './clarify'
+import { readJson, writeJson } from '../storage/jsonStore'
 
 /**
  * 모델 창보다 큰 첨부를 다루기 위한 문서 저장소와 분할 처리 파이프라인.
@@ -109,7 +111,87 @@ const REDUCE_PROMPT = `너는 여러 조각을 각각 처리한 결과를 하나
 export interface DocumentJobHooks {
   /** 진행 상황 표시 (예: "3/7 조각") */
   onProgress(done: number, total: number): void
+  /**
+   * 작업 로그 한 줄을 연다. 사용자가 실행 중인 작업의 "보기"로 펼쳐 보는 항목이고,
+   * 이게 없으면 무엇을 하고 있는지 확인할 방법이 진행률 숫자뿐이다.
+   */
+  onStepStart(id: string, summary: string): void
+  /** 그 줄의 결과를 확정한다 */
+  onStepEnd(id: string, status: 'done' | 'error', output: string): void
   signal: AbortSignal
+}
+
+/** 사용자에게 보여주고 그대로 실행할 계획 — 보여준 것과 다른 것이 돌지 않도록 조각을 그대로 넘긴다 */
+export interface DocumentPlan {
+  chunks: string[]
+  chunkTokens: number
+  /** 지난 실행들에서 잰 조각당 소요 시간으로 낸 추정치. 표본이 없으면 undefined */
+  estimatedSeconds?: number
+}
+
+interface DurationStats {
+  samples: number
+  avgChunkSeconds: number
+}
+
+const STATS_FILE = 'document-stats.json'
+
+function readStats(): DurationStats {
+  const s = readJson<Partial<DurationStats>>(STATS_FILE, {})
+  return { samples: s.samples ?? 0, avgChunkSeconds: s.avgChunkSeconds ?? 0 }
+}
+
+/** 조각당 소요 시간을 누적 평균으로 갱신한다 — 기기·모델마다 달라 실측만이 의미가 있다 */
+function recordDuration(chunks: number, seconds: number): void {
+  if (chunks <= 0 || seconds <= 0) return
+  const prev = readStats()
+  const perChunk = seconds / chunks
+  const samples = Math.min(prev.samples + 1, 20)
+  const avg = prev.samples === 0 ? perChunk : (prev.avgChunkSeconds * prev.samples + perChunk) / (prev.samples + 1)
+  writeJson(STATS_FILE, { samples, avgChunkSeconds: avg })
+}
+
+/** 실행 전에 계획을 세운다. LLM을 부르지 않으므로 확인 대화를 띄우기 전에 호출해도 즉시 끝난다 */
+export async function planDocumentJob(doc: StoredDocument, instruction: string): Promise<DocumentPlan> {
+  const { profile } = await resolveModelFor('standard')
+  const overhead = estimateTokens(TRANSFORM_PROMPT + instruction) + 200
+  const chunkTokens = chunkBudget(profile, overhead)
+  const chunks = splitIntoChunks(doc.text, chunkTokens)
+  const stats = readStats()
+  return {
+    chunks,
+    chunkTokens,
+    estimatedSeconds: stats.samples > 0 ? Math.round(stats.avgChunkSeconds * chunks.length) : undefined
+  }
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 90) return `약 ${Math.max(1, Math.round(seconds))}초`
+  return `약 ${Math.round(seconds / 60)}분`
+}
+
+/** 확인 대화에 띄울 계획 설명 */
+export function describePlan(
+  doc: StoredDocument,
+  instruction: string,
+  mode: 'transform' | 'reduce',
+  plan: DocumentPlan
+): string {
+  const lines = [
+    `"${doc.name}"은 ${doc.tokens.toLocaleString()}토큰이라 한 번에 처리할 수 없습니다.`,
+    '',
+    '이렇게 진행합니다:',
+    `1. 문단·제목 경계를 지키며 ${plan.chunks.length}개 조각으로 나눕니다 (조각당 최대 ${plan.chunkTokens.toLocaleString()}토큰).`,
+    `2. 각 조각에 "${instruction}"를 적용합니다. 원문이 그대로 돌아온 조각은 최대 2회까지 다시 시도합니다.`,
+    mode === 'reduce'
+      ? '3. 조각별 결과를 다시 합쳐 하나의 결과로 만듭니다.'
+      : '3. 조각별 결과를 순서대로 이어 붙입니다.',
+    '',
+    `모델을 ${plan.chunks.length}번 이상 호출하므로 시간이 걸립니다` +
+      (plan.estimatedSeconds ? ` — 지난 실행 기준 ${formatDuration(plan.estimatedSeconds)} 예상.` : '.'),
+    '백그라운드로 진행되며 그동안 대화는 계속할 수 있고, 작업 칩의 "취소"로 언제든 중단할 수 있습니다.'
+  ]
+  return lines.join('\n')
 }
 
 export interface DocumentJobResult {
@@ -151,10 +233,14 @@ export function looksUnchanged(source: string, output: string): boolean {
   while (same < n && a[same] === b[same]) same++
   if (same >= Math.min(200, n * 0.5)) return true
 
-  // 출력 단어가 대부분 원문에 그대로 있으면 변환되지 않은 것이다. 순서를 바꾸거나
-  // 일부를 줄여 놓아도 잡힌다 — 앞부분 비교만으로는 그런 경우를 놓친다.
-  // 같은 언어로 요약하는 작업은 여기서 오탐이 날 수 있지만, 오탐의 대가는 재시도 한 번뿐이고
-  // 재시도가 실패하면 첫 결과를 그대로 쓰므로 결과가 나빠지지는 않는다.
+  // 추출·필터링·요약은 원문의 단어만 골라내는 일이라 단어 겹침이 원래 높다. 실측: 프로세스
+  // 목록에서 이름·메모리만 뽑은 결과의 겹침이 10행 0.889, 20행 0.941, 40행 0.970으로 조각이
+  // 클수록 1에 가까워진다. 겹침만 보면 정상 결과를 전부 실패로 잡아 조각마다 3회씩 재시도했다.
+  //
+  // 원문 복사는 단어가 겹칠 뿐 아니라 길이도 그대로다. 짧아졌으면 무언가 걸러낸 것이므로
+  // 복사가 아니다. 이 조건 하나로 추출·요약은 통과시키고 진짜 복사만 남긴다.
+  if (b.length < a.length * 0.7) return false
+
   const words = (s: string): string[] => s.toLowerCase().match(/[a-z0-9가-힣]+/g) ?? []
   const src = new Set(words(a))
   const out = words(b)
@@ -181,11 +267,24 @@ export async function runDocumentJob(
   doc: StoredDocument,
   instruction: string,
   mode: 'transform' | 'reduce',
-  hooks: DocumentJobHooks
+  hooks: DocumentJobHooks,
+  /** 사용자가 확인한 계획. 주면 그 조각을 그대로 쓴다 — 보여준 것과 다른 것이 돌면 안 된다 */
+  plan?: DocumentPlan
 ): Promise<DocumentJobResult> {
+  const startedAt = Date.now()
   const { model, config, profile } = await resolveModelFor('standard')
   const overhead = estimateTokens(TRANSFORM_PROMPT + instruction) + 200
-  const chunks = splitIntoChunks(doc.text, chunkBudget(profile, overhead))
+  const chunks = plan?.chunks ?? splitIntoChunks(doc.text, chunkBudget(profile, overhead))
+
+  // 첫 조각이 끝나기 전에도 무엇을 하는지 보이도록, 분할 계획을 로그 첫 줄로 남긴다
+  hooks.onStepStart('split', `"${doc.name}" 분할 — ${chunks.length}조각`)
+  hooks.onStepEnd(
+    'split',
+    'done',
+    `문서 ${doc.tokens.toLocaleString()}토큰을 조각당 최대 ${chunkBudget(profile, overhead).toLocaleString()}토큰으로 나눴습니다.\n` +
+      `조각별 토큰: ${chunks.map((c) => estimateTokens(c)).join(', ')}\n` +
+      `방식: ${mode === 'reduce' ? '조각별 처리 후 병합' : '조각별 처리 후 이어 붙임'}`
+  )
 
   let inputTokens = 0
   let outputTokens = 0
@@ -209,21 +308,43 @@ export async function runDocumentJob(
   for (let i = 0; i < chunks.length; i++) {
     if (hooks.signal.aborted) throw new Error('사용자가 중지했습니다.')
     hooks.onProgress(i, chunks.length)
+    const stepId = `chunk-${i}`
+    const firstLine = chunks[i].split('\n').find((l) => l.trim())?.trim() ?? ''
+    hooks.onStepStart(
+      stepId,
+      `조각 ${i + 1}/${chunks.length} (${estimateTokens(chunks[i]).toLocaleString()}토큰) ${firstLine.slice(0, 50)}`
+    )
+
     let out = await runChunk(chunks[i], i, '')
+    let attempts = 1
+    let failed = false
     // 같은 조각이 어떤 때는 처리되고 어떤 때는 원문 그대로 돌아온다. 결과를 보고 다시 시킨다.
     for (let attempt = 1; attempt < MAX_CHUNK_ATTEMPTS && looksUnchanged(chunks[i], out); attempt++) {
       if (hooks.signal.aborted) throw new Error('사용자가 중지했습니다.')
       const retry = await runChunk(chunks[i], i, RETRY_HINT)
+      attempts++
       // 재시도가 나아지지 않으면 첫 결과를 유지한다 — 결과가 나빠지지는 않게
       if (!looksUnchanged(chunks[i], retry)) {
         out = retry
         break
       }
-      if (attempt === MAX_CHUNK_ATTEMPTS - 1) unchanged++
+      if (attempt === MAX_CHUNK_ATTEMPTS - 1) {
+        unchanged++
+        failed = true
+      }
     }
+
+    hooks.onStepEnd(
+      stepId,
+      failed ? 'error' : 'done',
+      (failed ? `${attempts}회 시도했지만 원문이 그대로 남았습니다.\n\n` : attempts > 1 ? `${attempts}회 시도 후 성공.\n\n` : '') +
+        out.slice(0, 400)
+    )
     parts.push(out)
   }
   hooks.onProgress(chunks.length, chunks.length)
+  // 다음 실행의 예상 시간은 이번 실측에서 나온다
+  recordDuration(chunks.length, (Date.now() - startedAt) / 1000)
 
   recordUsage(
     { sessionId, kind: 'chat', provider: config.label, model: config.model, tier: 'standard' },
@@ -236,20 +357,25 @@ export async function runDocumentJob(
 
   // 요약·분석은 부분 결과를 다시 합친다. 합칠 것들이 또 창을 넘으면 단계적으로 줄인다.
   let pending = parts
+  let round = 0
   while (pending.length > 1) {
     const groups = splitIntoChunks(pending.join('\n\n---\n\n'), chunkBudget(profile, overhead))
     const next: string[] = []
-    for (const group of groups) {
+    round++
+    for (let g = 0; g < groups.length; g++) {
       if (hooks.signal.aborted) throw new Error('사용자가 중지했습니다.')
+      const stepId = `reduce-${round}-${g}`
+      hooks.onStepStart(stepId, `병합 ${round}단계 ${g + 1}/${groups.length} (부분 결과 ${pending.length}개)`)
       const { text, usage } = await completeText({
         model,
         system: REDUCE_PROMPT,
-        prompt: `## 원래 지시\n${instruction}\n\n## 부분 결과들\n${group}`,
+        prompt: `## 원래 지시\n${instruction}\n\n## 부분 결과들\n${groups[g]}`,
         ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
         ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {})
       })
       inputTokens += usage.inputTokens ?? 0
       outputTokens += usage.outputTokens ?? 0
+      hooks.onStepEnd(stepId, 'done', text.trim().slice(0, 400))
       next.push(text.trim())
     }
     // 한 단계에서 줄지 않으면 무한 루프가 되므로 멈춘다
@@ -272,9 +398,22 @@ export function inferMode(instruction: string): 'transform' | 'reduce' {
 }
 
 /** 메인 에이전트에게 노출되는 문서 처리 도구 */
+const PROCEED = '진행'
+const PROCEED_ALWAYS = '진행 (이 대화에서 다시 묻지 않기)'
+const CANCEL = '취소'
+
+/** "다시 묻지 않기"를 고른 대화 — 승인 게이트의 세션 허용과 같은 범위다 */
+const skipConfirm = new Set<string>()
+
 export function documentTools(
+  win: BrowserWindow,
   sessionId: string,
-  start: (documentId: string, instruction: string, mode: 'transform' | 'reduce') => TaskInfo
+  start: (
+    documentId: string,
+    instruction: string,
+    mode: 'transform' | 'reduce',
+    plan: DocumentPlan
+  ) => TaskInfo
 ): ToolSet {
   return {
     process_document: tool({
@@ -315,10 +454,28 @@ export function documentTools(
         const finalMode = skill?.mode ?? mode ?? inferMode(finalInstruction)
 
         try {
-          const info = start(documentId, finalInstruction, finalMode)
+          // 모델을 조각 수만큼 부르는 긴 작업이다. 무엇을 어떻게 할지 보여주고 동의를 받는다.
+          const plan = await planDocumentJob(doc, finalInstruction)
+          if (!skipConfirm.has(sessionId)) {
+            const choice = await askUserConfirm(win, {
+              title: `${doc.name} — ${finalInstruction.slice(0, 40)}`,
+              message: describePlan(doc, finalInstruction, finalMode, plan),
+              options: [PROCEED, PROCEED_ALWAYS, CANCEL]
+            })
+            if (choice === null) {
+              return { declined: true, reason: '사용자가 확인하지 않아 시작하지 않았습니다.' }
+            }
+            if (choice === CANCEL) {
+              return { declined: true, reason: '사용자가 취소했습니다. 다시 시도하지 말고 무엇을 원하는지 물어라.' }
+            }
+            if (choice === PROCEED_ALWAYS) skipConfirm.add(sessionId)
+          }
+
+          const info = start(documentId, finalInstruction, finalMode, plan)
           return {
             taskId: info.id,
             status: info.status,
+            chunks: plan.chunks.length,
             documentTokens: doc.tokens,
             ...(skill ? { usedSkill: skill.name } : {})
           }

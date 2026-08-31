@@ -14,7 +14,7 @@ import { notifyIfBackground } from '../notify'
 import { clarifyTool } from './clarify'
 import { integrationTools } from '../integrations/tools'
 import { mcpToolsFor } from '../mcp/manager'
-import { getDocument, runDocumentJob } from './documents'
+import { getDocument, runDocumentJob, type DocumentPlan } from './documents'
 import { recordRun } from '../skills/store'
 
 interface Task {
@@ -86,7 +86,9 @@ export function startDocumentTask(
   sessionId: string,
   documentId: string,
   instruction: string,
-  mode: 'transform' | 'reduce'
+  mode: 'transform' | 'reduce',
+  /** 사용자가 확인 대화에서 동의한 계획 — 보여준 조각 그대로 실행한다 */
+  plan?: DocumentPlan
 ): TaskInfo {
   const doc = getDocument(documentId)
   if (!doc) throw new Error(`documentId ${documentId}에 해당하는 문서가 없습니다.`)
@@ -101,6 +103,11 @@ export function startDocumentTask(
   }
   const abort = new AbortController()
   tasks.set(info.id, { info, abort })
+
+  // 워커와 마찬가지로 활동 로그를 남긴다 — 이게 없으면 실행 중 작업의 "보기"가 빈 화면이 된다
+  const log: ChatItem[] = []
+  info.log = log
+  const steps = new Map<string, ChatItem & { kind: 'tool' }>()
   emit(win, info)
 
   void (async () => {
@@ -110,8 +117,28 @@ export function startDocumentTask(
         onProgress: (done, total) => {
           info.detail = `${done}/${total} 조각 처리`
           emit(win, info)
+        },
+        onStepStart: (id, summary) => {
+          const item: ChatItem & { kind: 'tool' } = {
+            kind: 'tool',
+            toolCallId: id,
+            toolName: 'process_document',
+            summary,
+            status: 'running'
+          }
+          steps.set(id, item)
+          if (log.length < MAX_LOG_ITEMS) log.push(item)
+          emit(win, info)
+        },
+        onStepEnd: (id: string, status: 'done' | 'error', output: string) => {
+          const item = steps.get(id)
+          if (item) {
+            item.status = status
+            item.output = output
+          }
+          emit(win, info)
         }
-      })
+      }, plan)
       info.usage = { input: result.inputTokens, output: result.outputTokens }
       addSessionUsage(sessionId, result.inputTokens, result.outputTokens)
 

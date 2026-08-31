@@ -26,12 +26,16 @@ export default function ClarifyModal(): JSX.Element | null {
     setQueue((q) => q.slice(1))
   }
 
+  // 확인(confirm)은 선택지 중 하나를 고르는 것이라 자유 입력을 받지 않는다.
+  // 입력란을 함께 띄우면 무엇을 해야 하는지가 흐려진다.
+  const confirmOnly = current.kind === 'confirm'
+
   return (
     <div className="overlay">
       <div className="dialog">
         <h3>
-          작업에 사용자 확인이 필요합니다
-          <span className="risk write">질문</span>
+          {confirmOnly ? '진행하기 전에 확인해 주세요' : '작업에 사용자 확인이 필요합니다'}
+          <span className="risk write">{confirmOnly ? '확인' : '질문'}</span>
         </h3>
         <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>작업: {current.taskTitle}</div>
         <div style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{current.question}</div>
@@ -39,13 +43,15 @@ export default function ClarifyModal(): JSX.Element | null {
         {current.options && current.options.length > 0 && (
           <div className="row" style={{ flexWrap: 'wrap' }}>
             {current.options.map((opt, i) => (
-              <button key={i} onClick={() => answer(opt)}>
+              <button key={i} className={confirmOnly && i === 0 ? 'primary' : ''} onClick={() => answer(opt)}>
                 {opt}
               </button>
             ))}
           </div>
         )}
 
+        {confirmOnly ? null : (
+        <>
         <textarea
           autoFocus
           value={text}
@@ -64,6 +70,8 @@ export default function ClarifyModal(): JSX.Element | null {
             답변 전송
           </button>
         </div>
+        </>
+        )}
       </div>
     </div>
   )
