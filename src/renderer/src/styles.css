@@ -102,6 +102,26 @@ body.linux .topnav { padding-right: calc(100vw - env(titlebar-area-width, 100vw)
 }
 .notif-hint .close:hover { color: var(--text); }
 
+/* 새 버전 안내 배너 — 확인은 자동, 내려받기·설치는 사용자가 여기서 선택한다 */
+.update-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; font-size: 12.5px; color: var(--text);
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel));
+  border-bottom: 1px solid var(--border);
+}
+.update-banner .ic { font-size: 14px; }
+.update-banner .txt { flex: 1; color: var(--text); }
+.update-banner .go {
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+  border-radius: 8px; padding: 5px 12px; font-size: 12px; white-space: nowrap;
+}
+.update-banner .go:hover { background: var(--accent-dim); }
+.update-banner .later, .update-banner .close {
+  background: transparent; color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 12px; font-size: 12px; white-space: nowrap;
+}
+.update-banner .later:hover, .update-banner .close:hover { color: var(--text); border-color: var(--text-dim); }
+
 .layout { flex: 1; display: flex; min-height: 0; }
 
 /* 대화 화면 자체의 가로 배치 — 사이드바를 오른쪽으로 옮기면 순서를 뒤집는다 */
@@ -539,6 +559,11 @@ body.resizing * { cursor: col-resize !important; }
 }
 .update-actions button:hover { background: var(--accent-dim); }
 .update-actions button:disabled { opacity: 0.55; cursor: default; }
+.update-actions { display: flex; gap: 8px; }
+.update-actions button.ghost {
+  background: transparent; color: var(--text-dim); border-color: var(--border);
+}
+.update-actions button.ghost:hover { background: transparent; color: var(--text); border-color: var(--text-dim); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grid-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: center; }
 

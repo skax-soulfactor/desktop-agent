@@ -62,7 +62,13 @@ import { listUsage } from './usage/store'
 import { listMcpServers, saveMcpServer, deleteMcpServer } from './mcp/store'
 import { testMcpServer, invalidateMcpConnection } from './mcp/manager'
 import type { McpServerConfig } from '@shared/types'
-import { getAppVersion, getUpdateStatus, checkForUpdatesManual, quitAndInstall } from './update'
+import {
+  getAppVersion,
+  getUpdateStatus,
+  checkForUpdatesManual,
+  downloadUpdate,
+  quitAndInstall
+} from './update'
 import {
   listNotifications,
   markNotificationsRead,
@@ -282,5 +288,6 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   ipcMain.handle('app:version', () => getAppVersion())
   ipcMain.handle('update:status', () => getUpdateStatus())
   ipcMain.handle('update:check', () => checkForUpdatesManual())
+  ipcMain.handle('update:download', () => downloadUpdate())
   ipcMain.handle('update:install', () => quitAndInstall())
 }

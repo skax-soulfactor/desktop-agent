@@ -63,8 +63,8 @@ app.whenReady().then(() => {
   refreshBadge()
   startScheduler(() => mainWindow)
   void initNetwork(() => mainWindow)
-  // 자동 업데이트: 이벤트를 렌더러로 연결하고, 패키징된 빌드에서는 주기적으로 확인한다
-  // (수동 확인·설치는 설정 화면의 update:* IPC로 처리)
+  // 업데이트: 새 버전 유무만 자동으로 확인해 렌더러에 알린다.
+  // 내려받기·설치는 항상 사용자가 배너나 설정 화면에서 직접 선택한다 (update:* IPC)
   initUpdater(() => mainWindow)
 
   app.on('activate', () => {

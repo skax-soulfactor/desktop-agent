@@ -12,6 +12,7 @@ import NetworkApprovalModal from './network/NetworkApprovalModal'
 import ClarifyModal from './clarify/ClarifyModal'
 import SecretModal from './secrets/SecretModal'
 import NotifyHint from './NotifyHint'
+import UpdateBanner from './UpdateBanner'
 
 type Page = 'chat' | 'memory' | 'skills' | 'schedules' | 'network' | 'usage' | 'notifications' | 'settings'
 
@@ -92,6 +93,7 @@ export default function App(): JSX.Element {
           설정
         </button>
       </div>
+      <UpdateBanner onOpenSettings={() => setPage('settings')} />
       <NotifyHint onOpenNotifications={() => setPage('notifications')} />
       <div className="layout">
         {page === 'chat' && (
