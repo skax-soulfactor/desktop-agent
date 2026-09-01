@@ -95,7 +95,13 @@ function capOutput(value: unknown, maxChars: number): unknown {
       used += cost
       kept.push(item)
     }
-    if (kept.length < value.length) kept.push(`...[${value.length - kept.length}개 항목 생략]`)
+    if (kept.length < value.length) {
+      // 첫 항목 하나가 예산보다 크면 위 루프는 아무것도 담지 못한다. 그대로 두면 도구를 부르고도
+      // 결과를 한 글자도 못 보는 일이 생긴다 — 실제로 MCP 응답({content:[{text: 큰 문자열}]})이
+      // 통째로 "1개 항목 생략"으로 바뀌어 사라졌다. 통째로 버리는 대신 잘라서라도 남긴다.
+      if (kept.length === 0) kept.push(capOutput(value[0], maxChars))
+      if (kept.length < value.length) kept.push(`...[${value.length - kept.length}개 항목 생략]`)
+    }
     return kept
   }
   if (value !== null && typeof value === 'object') {
@@ -111,6 +117,15 @@ function capOutput(value: unknown, maxChars: number): unknown {
     return out
   }
   return value
+}
+
+/**
+ * 도구 결과를 이번 턴의 예산에 맞춘다 — 큰 텍스트는 문서로 빼내고, 남는 부분만 줄인다.
+ * buildTools 바깥에서 만들어지는 도구(MCP 검색 라우터 등)도 같은 규칙을 쓰도록 공개한다.
+ */
+export function capToolResult(result: unknown, ctx: TurnContext, label: string): unknown {
+  if (!ctx.resultChars) return result
+  return capOutput(offloadLargeText(result, ctx.resultChars, ctx, label), ctx.resultChars)
 }
 
 /**

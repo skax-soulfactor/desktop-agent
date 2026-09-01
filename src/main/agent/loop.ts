@@ -19,13 +19,23 @@ import { scheduleTools } from './scheduler'
 import { memoryTools } from '../memory/tools'
 import { peerTools, buildPeerContext } from '../network/peerTools'
 import { integrationTools } from '../integrations/tools'
+import { hasSearchServer, searchTools } from '../mcp/search'
+import { searchPresetHint } from '@shared/searchPresets'
 
 /**
  * 메인(대화) 에이전트가 직접 쓸 수 있는 도구.
  * 확인만 하면 되는 일까지 위임하면 대화가 "잠시만요"로 파편화되므로,
  * 즉시 끝나는 조회는 직접 하게 한다. shell_exec도 승인 게이트를 그대로 거친다.
+ *
+ * http_request도 여기 있다. 최신 버전·릴리스처럼 시간에 따라 변하는 값을 확인하려고 매번 작업을
+ * 위임하면 대화가 끊기고, 그 비용 때문에 모델은 결국 확인을 건너뛰고 학습 시점의 낡은 값으로 답한다.
+ * 다만 로컬 모델에는 주지 않는다 — 이 도구 정의 하나가 239토큰이라 창이 4096이면 그만큼 대화가
+ * 밀려나고, 받아 온 JSON 본문도 어차피 그 창에 들어가지 않는다. 그쪽은 delegate_task로 워커가 한다.
  */
-const MAIN_AGENT_TOOLS = ['fs_read', 'fs_list', 'shell_exec', 'shell_exec_elevated']
+function mainAgentTools(profile: ModelProfile): string[] {
+  const base = ['fs_read', 'fs_list', 'shell_exec', 'shell_exec_elevated']
+  return profile.local ? base : [...base, 'http_request']
+}
 
 const activeTurns = new Map<string, AbortController>()
 
@@ -74,6 +84,12 @@ function compactSystemPrompt(): string[] {
     '  그 전체를 대상으로 하는 작업(번역·요약·분석·추출)은 미리보기로 답하지 말고 process_document를 호출하라.',
     '  분할·처리·병합은 앱이 알아서 한다. 네가 조각을 나누거나 "앞부분만 했다"고 답할 필요 없다.',
     '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
+    '- 출처는 이번 턴에 네가 실제로 호출한 도구에서만 나온다. 도구를 호출했으면 답변 끝에 `출처:` 한 줄로 그 파일 경로·명령·URL을 적어라.',
+    '- 도구를 하나도 호출하지 않았으면 `출처:` 줄 자체를 쓰지 마라. 대신 답변 첫 줄에 "확인 안 함 — 학습 시점 기준이라 지금은 다를 수 있다"라고 적어라.',
+    '- 웹사이트·공식 문서·릴리스 노트를 출처로 적는 것은 이번 턴에 그 URL을 실제로 연 경우에만 허용된다. 열지 않았으면 이름조차 적지 마라.',
+    '- 네 학습 지식은 과거에 멈춰 있다. 버전·릴리스·가격·API 스펙처럼 변하는 값은 기억으로 답하지 마라.',
+    '  로컬에서 확인되는 것은 shell_exec로 직접 봐라.',
+    searchRule(true),
     '- 파일 읽기·목록 확인·상태 조회는 fs_read/fs_list/shell_exec로 직접 실행하고 그 자리에서 답하라.',
     '  "실행해도 될까요?"라고 되묻지 마라 — 승인 창은 앱이 자동으로 띄운다.',
     '- 출력이 클 것 같은 조회는 명령 자체에서 정렬·필터·개수 제한을 걸어라.',
@@ -101,6 +117,26 @@ function elevationRule(): string {
     : '- 관리자(root) 권한이 필요한 명령은 실행할 수 없다(sudo는 차단된다). 필요하면 사용자에게 터미널에서 직접 실행하도록 안내하라.'
 }
 
+/**
+ * 웹 검색에 대해 알려 줄 한 줄. 등록된 검색 MCP 서버가 없으면 web_search 도구 자체가 만들어지지
+ * 않으므로 이름을 알려 주지 않는다 — 대신 무엇을 등록하면 되는지 확인된 값으로 안내한다.
+ * 로컬 모델에도 web_search는 준다. 도구 정의가 218토큰이라 한때 뺐었는데, 그러면 최신 정보를 물어도
+ * 확인할 수단이 아예 없어 학습 시점의 값을 그대로 답한다 — 실제로 그렇게 나갔다. 대신 문장을 더 강하게 쓴다:
+ * 작은 모델은 "쓸 수 있다"로는 안 부르고 "먼저 부르라"로 써야 부른다.
+ */
+function searchRule(local: boolean): string {
+  if (!hasSearchServer()) {
+    if (local) return '- 웹 검색 도구가 없다. 확인할 수 없는 것은 지어내지 말고 모른다고 답하라.'
+    return (
+      '- 웹 검색 도구가 없다. 그러니 URL을 지어내지 마라. 검색이 필요한 질문이면 add_mcp_server로 검색 MCP 서버 등록을 제안하라 — ' +
+      searchPresetHint()
+    )
+  }
+  return local
+    ? '- 최신 정보(버전·릴리스·가격·정책·최근 사건)를 묻는 질문에는 답을 쓰기 전에 반드시 web_search를 먼저 호출하라. 기억으로 답하지 마라.'
+    : '- 검색이 필요하면 web_search를 호출하라. 결과의 URL을 출처로 밝히고, 값이 중요하면 그 URL을 http_request로 다시 확인하라.'
+}
+
 /** 클라우드 모델용 전체 프롬프트 */
 function fullSystemPrompt(): string[] {
   return [
@@ -115,6 +151,34 @@ function fullSystemPrompt(): string[] {
     '- 사용자가 "그래서 결론이 뭐야"처럼 결론을 요구하면 추가 조사를 시작하지 말고 현재까지의 결론을 먼저 제시하라. 확신이 부족하면 "확인된 사실 / 추정 / 남은 확인거리"로 나눠 밝혀라.',
     '- 확인한 사실과 추정을 반드시 구분해서 말하라. 검증하지 않은 것을 "즉시 해결됩니다"처럼 단정하지 마라.',
     '- 앞선 진단이 틀린 것으로 드러나면 다음 응답 첫 문장에서 명시적으로 철회하고, 그때 되돌려야 할 변경이 있으면 함께 알려라.',
+    '',
+    '## 출처 표시 규칙',
+    '- 사실을 담은 답변에는 그것을 어디서 얻었는지 함께 밝혀라. 사용자는 네가 확인한 것과 그냥 아는 것을 구분할 수 있어야 한다.',
+    '- 근거가 하나뿐이면 답변 끝에 `출처:` 한 줄로 모으고, 문단마다 근거가 다르면 해당 문장 옆에 괄호로 달아라.',
+    '- 출처가 될 수 있는 것은 이번 대화에서 네가 실제로 호출한 도구의 결과뿐이다. 도구를 하나도 호출하지 않았으면 `출처:` 줄을 쓰지 말고 "확인 안 함"이라고 밝혀라.',
+    '  웹사이트·공식 문서·릴리스 노트의 이름을 출처로 적는 것은 그 URL을 이번에 실제로 연 경우에만 허용된다 — 열지 않고 적으면 사용자는 확인된 답으로 오해한다.',
+    '- 출처 표기: 파일 읽기·목록은 경로, 셸 실행은 실제 실행한 명령, HTTP는 요청한 URL, 첨부는 파일 이름(가능하면 절·페이지까지),',
+    '  지식베이스는 기억 제목, 백그라운드 작업 결과는 작업 제목, 피어는 에이전트 이름, MCP 도구는 도구 이름과 대상 서비스.',
+    '  예: 출처: `~/app/config.json`, `git log -5 --oneline`, 지식베이스 "빌드 산출물 위치"',
+    '- 도구로 확인하지 않고 네 일반 지식으로 답한 부분은 "일반 지식(확인 안 함)"이라고 명시하라. 출처가 없다는 사실 자체가 알려야 할 출처다.',
+    '- 확인한 사실과 일반 지식이 한 답변에 섞이면 어느 쪽인지 문장 단위로 갈라 써라. 뭉뚱그려 한 덩어리로 내지 마라.',
+    '- 출처를 지어내지 마라. 읽지 않은 경로, 실행하지 않은 명령, 없는 기억 제목을 출처로 적는 것은 답이 틀리는 것보다 나쁘다 — 사용자가 검증할 길까지 막는다.',
+    '- 도구 결과가 미리보기(documentId)뿐이면 그 사실도 함께 밝혀라. 전문을 다 보고 말한 것처럼 쓰지 마라.',
+    '- 인사·확인·되묻기처럼 사실 주장이 없는 짧은 응답에는 출처를 붙이지 마라.',
+    '',
+    '## 최신 정보 규칙',
+    '- 네 학습 지식은 과거 시점에 멈춰 있다. 위에 적힌 현재 시각과의 간격만큼 낡았다고 전제하라.',
+    '- 시간에 따라 변하는 것은 기억으로 답하지 마라 — 라이브러리·앱의 최신 버전, 릴리스와 변경점, 가격·요금제,',
+    '  API 스펙과 파라미터 이름, 설정 항목, 문서 URL, 사람의 소속·직책, 최근 사건.',
+    '  사용자가 "최신", "지금", "요즘", "현재"를 붙여 물었는데 확인 없이 답하면 그것은 오답이다.',
+    '- 확인 순서: ① 로컬에서 답이 나오는 것(설치된 버전, 커밋 이력, 설정 파일 값)은 shell_exec·fs_read로 직접 본다.',
+    '  ② 바깥 사실은 http_request로 1차 출처의 JSON API에서 가져온다. HTML 페이지를 통째로 받지 마라 —',
+    '  본문이 잘리거나 documentId로 빠져서 정작 필요한 값을 못 읽는다.',
+    '  예: npm `https://registry.npmjs.org/<패키지>/latest`, GitHub 릴리스 `https://api.github.com/repos/<소유자>/<저장소>/releases/latest`, PyPI `https://pypi.org/pypi/<패키지>/json`.',
+    searchRule(false),
+    '- 확인한 값에는 출처(URL·명령)와 함께 언제 확인한 값인지를 밝혀라.',
+    '- 끝내 확인하지 못하면 낡았을 수 있다는 것을 먼저 말하고, 무엇을 확인하면 되는지(명령·URL)를 알려라. 낡은 값을 현재형으로 단정하지 마라.',
+    '- 지식베이스 기억에 적힌 버전·경로·설정값도 기록 당시의 값이다. 기록 시점(각 기억에 표시된다)이 오래됐으면 그대로 쓰지 말고 다시 확인하라.',
     '',
     '## 문제 진단 규칙',
     '- 스택 트레이스·에러 메시지의 맨 윗줄만 보고 결론내지 마라. 예외의 실제 의미와 발생 조건을 먼저 확인하라.',
@@ -408,7 +472,8 @@ export async function runTurn(
     ctx.resultChars = profile.toolResultChars
 
     const tools = {
-      ...buildTools(ctx, MAIN_AGENT_TOOLS),
+      ...buildTools(ctx, mainAgentTools(profile)),
+      ...(await searchTools(ctx)),
       ...taskTools(win, sessionId),
       ...scheduleTools(sessionId),
       ...memoryTools(win, sessionId),

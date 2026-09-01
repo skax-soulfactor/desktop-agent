@@ -72,8 +72,10 @@ export function buildMemoryContext(userMessage: string, opts: RecallOptions = {}
     (m) => shareable(m) && !pinned.some((p) => p.id === m.id)
   )
 
+  // 기록 시점을 함께 보여준다 — 기억에 적힌 버전·경로·설정값은 적을 당시의 것이라 낡을 수 있고,
+  // 모델이 그것을 다시 확인할지 판단하려면 언제 적힌 것인지 알아야 한다
   const body = (m: MemoryEntry): string =>
-    `### [${TYPE_LABEL[m.type]}] ${m.title}\n${m.content.slice(0, bodyChars)}`
+    `### [${TYPE_LABEL[m.type]}] ${m.title} (기록: ${m.updatedAt.slice(0, 10)})\n${m.content.slice(0, bodyChars)}`
 
   let ctx = `## 지식베이스 (이전 협업에서 기록된 기억)\n\n### 전체 기억 인덱스\n${indexLines.join('\n')}`
   if (pinned.length > 0) {
@@ -83,9 +85,9 @@ export function buildMemoryContext(userMessage: string, opts: RecallOptions = {}
     ctx += `\n\n### 현재 요청과 관련된 기억\n\n${relevant.map(body).join('\n\n')}`
   }
   ctx += budgetTokens
-    ? '\n\n기억은 배경 참고일 뿐 검증된 사실이 아니다. 현재 발언과 직접 확인한 것을 우선하라.'
+    ? '\n\n기억은 배경 참고일 뿐 검증된 사실이 아니다. 현재 발언과 직접 확인한 것을 우선하라. 기억을 근거로 답하면 그 제목을 출처로 밝혀라.'
     : '\n\n기억을 활용해 사용자의 의도를 파악하고, 관련된 진행 중 작업이나 요구사항이 있으면 선제적으로 제안하라. ' +
       '교훈(lesson) 기억이 있으면 같은 실수를 반복하지 마라. 기억이 사용자의 현재 발언과 모순되면 현재 발언을 우선하라. ' +
-      '기억은 배경 참고일 뿐 검증된 사실이 아니다. 지금 직접 확인한 것보다 앞세우지 말고, 기억 내용을 이번에 확인한 결과인 것처럼 말하지 마라.'
+      '기억은 배경 참고일 뿐 검증된 사실이 아니다. 지금 직접 확인한 것보다 앞세우지 말고, 기억 내용을 이번에 확인한 결과인 것처럼 말하지 마라. 기억을 근거로 답한 부분은 그 기억의 제목을 출처로 밝혀라.'
   return ctx
 }
