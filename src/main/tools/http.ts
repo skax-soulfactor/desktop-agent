@@ -36,7 +36,9 @@ export const httpRequest: DesktopToolDef<typeof schema> = {
   description:
     '외부 서비스의 HTTP API를 호출한다. 인증 토큰은 headers에 {{secret:이름}} 플레이스홀더로 넣으면 ' +
     '실행 시 안전하게 치환된다 (예: "Authorization": "Bearer {{secret:notion}}"). ' +
-    '필요한 시크릿이 없으면 먼저 request_secret으로 사용자에게 등록을 요청하라.',
+    '필요한 시크릿이 없으면 먼저 request_secret으로 사용자에게 등록을 요청하라. ' +
+    '인증 없는 공개 API로 최신 정보(패키지 최신 버전, 릴리스, 공개 문서)를 확인할 때도 사용한다 — ' +
+    'HTML 페이지보다 JSON API를 우선하라.',
   risk: 'execute',
   inputSchema: schema,
   describeCall: (i) => `HTTP ${i.method} ${i.url}`,

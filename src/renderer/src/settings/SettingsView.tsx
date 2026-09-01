@@ -11,6 +11,7 @@ import type {
   SecretMeta,
   TierAssignment
 } from '@shared/types'
+import { SEARCH_MCP_PRESETS, type SearchMcpPreset } from '@shared/searchPresets'
 
 const TIER_INFO: { tier: ModelTier; label: string; desc: string }[] = [
   { tier: 'light', label: '경량', desc: '기억 추출, 단순 수집·정리 작업' },
@@ -84,6 +85,7 @@ export default function SettingsView(): JSX.Element {
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([])
   const [mcpForm, setMcpForm] = useState(emptyMcpForm())
   const [mcpError, setMcpError] = useState<string | null>(null)
+  const [preset, setPreset] = useState<SearchMcpPreset | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
   const [elevation, setElevation] = useState(false)
 
@@ -103,6 +105,21 @@ export default function SettingsView(): JSX.Element {
     await window.api.setSecret(secForm.name.trim(), secForm.value)
     setSecForm({ name: '', value: '' })
     await refresh()
+  }
+
+  /** 검색 서버 프리셋을 양식에 채워 넣는다 — 등록은 사용자가 내용을 보고 누른다 */
+  const applyPreset = (p: SearchMcpPreset): void => {
+    setMcpError(null)
+    setPreset(p)
+    setMcpForm({
+      name: p.name,
+      transport: p.transport,
+      command: p.transport === 'stdio' ? [p.command, ...(p.args ?? [])].join(' ') : '',
+      url: p.url ?? '',
+      headersJson: '',
+      envJson:
+        p.envKey && p.secret ? JSON.stringify({ [p.envKey]: `{{secret:${p.secret}}}` }) : ''
+    })
   }
 
   const addMcp = async (): Promise<void> => {
@@ -393,7 +410,7 @@ export default function SettingsView(): JSX.Element {
       <div className="card">
         <div style={{ color: 'var(--text-dim)', fontSize: 13, marginBottom: 10 }}>
           등록된 MCP 서버의 도구는 백그라운드 워커가 사용합니다 (호출 시마다 승인 게이트 통과). 에이전트가 대화 중
-          직접 등록할 수도 있습니다.
+          직접 등록할 수도 있습니다. 검색 서버를 등록하면 대화 중에도 web_search로 최신 정보를 확인합니다.
         </div>
         {mcpServers.length > 0 && (
           <table>
@@ -436,6 +453,26 @@ export default function SettingsView(): JSX.Element {
             </tbody>
           </table>
         )}
+        <div style={{ marginTop: 10 }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: 13, marginBottom: 6 }}>
+            검색 서버 빠른 설정 — 누르면 아래 양식이 채워집니다. 로컬 명령(stdio) 방식은 Node(npx)가 설치돼 있어야 합니다.
+          </div>
+          <div className="row">
+            {SEARCH_MCP_PRESETS.map((p) => (
+              <button key={p.key} onClick={() => applyPreset(p)}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {preset && (
+            <div style={{ color: 'var(--text-dim)', fontSize: 13, marginTop: 6 }}>
+              {preset.note}{preset.secret ? ` 키는 위의 시크릿에 "${preset.secret}" 이름으로 저장하세요.` : ''}{' '}
+              <a href={preset.homepage} target="_blank" rel="noreferrer">
+                {preset.homepage}
+              </a>
+            </div>
+          )}
+        </div>
         <div className="grid-form" style={{ marginTop: 10 }}>
           <span>이름</span>
           <input

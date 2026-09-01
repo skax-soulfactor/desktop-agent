@@ -7,7 +7,7 @@ import { resolveSecrets, resolveSecretsInRecord } from '../secrets/store'
 import { getMcpServer, listMcpServers, setMcpLastStatus } from './store'
 import type { TurnContext } from '../tools'
 
-interface Connection {
+export interface Connection {
   client: MCPClient
   tools: ToolSet
 }
@@ -15,17 +15,31 @@ interface Connection {
 /** 서버별 연결 캐시 — 설정 변경 시 invalidate */
 const connections = new Map<string, Connection>()
 
-async function connect(cfg: McpServerConfig): Promise<Connection> {
+/**
+ * 윈도우에서 npx·npm 같은 것은 실행 파일이 아니라 .cmd 스크립트다. 스토리오 전송은 shell:false로
+ * spawn하므로 "npx"는 ENOENT로, "npx.cmd"는 EINVAL로 죽는다(노드가 .cmd 직접 실행을 막는다).
+ * 그래서 등록만 되고 연결은 절대 안 되는 서버가 된다 — cmd /c로 감싸야 실제로 뜬다.
+ */
+const WIN_CMD_SHIM = /^(npx|npm|pnpm|pnpx|yarn|bunx)$/i
+
+function spawnSpec(command: string, args: string[]): { command: string; args: string[] } {
+  return process.platform === 'win32' && WIN_CMD_SHIM.test(command)
+    ? { command: 'cmd', args: ['/c', command, ...args] }
+    : { command, args }
+}
+
+export async function connectMcp(cfg: McpServerConfig): Promise<Connection> {
   const cached = connections.get(cfg.id)
   if (cached) return cached
 
   let client: MCPClient
   if (cfg.transport === 'stdio') {
     if (!cfg.command) throw new Error('stdio MCP 서버에는 command가 필요합니다.')
+    const spec = spawnSpec(cfg.command, cfg.args ?? [])
     client = await createMCPClient({
       transport: new Experimental_StdioMCPTransport({
-        command: cfg.command,
-        args: cfg.args,
+        command: spec.command,
+        args: spec.args,
         env: resolveSecretsInRecord(cfg.env)
       })
     })
@@ -67,7 +81,7 @@ export async function testMcpServer(id: string): Promise<{ ok: boolean; tools?: 
   if (!cfg) return { ok: false, error: '해당 id의 MCP 서버가 없습니다.' }
   await invalidateMcpConnection(id)
   try {
-    const conn = await connect(cfg)
+    const conn = await connectMcp(cfg)
     return { ok: true, tools: Object.keys(conn.tools) }
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e)
@@ -90,7 +104,7 @@ export async function mcpToolsFor(ctx: TurnContext): Promise<ToolSet> {
     if (!cfg.enabled) continue
     let conn: Connection
     try {
-      conn = await connect(cfg)
+      conn = await connectMcp(cfg)
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
       setMcpLastStatus(cfg.id, { ok: false, error, at: new Date().toISOString() })
