@@ -14,11 +14,50 @@ permissions:
   contents: write # GITHUB_TOKEN으로 Release 생성/업로드
 
 jobs:
+  # 태그가 가리키는 것이 실제로 낼 수 있는 것인지 먼저 본다.
+  #
+  # scripts/preversion.cjs가 같은 확인을 하지만 그것은 체크아웃된 브랜치에만 존재하는
+  # 파일이다. 다른 머신, 아직 머지되지 않은 브랜치, ALLOW_VERSION=1이면 그냥 없다.
+  # v0.1.21이 그렇게 나갔다 — main보다 뒤처진 지점에서 태그가 만들어졌고, 코드가 한 줄도
+  # 바뀌지 않은 빌드가 자산 11개로 발행돼 자동 업데이트로 흘러갔다. 태그 푸시가 릴리스의
+  # 방아쇠인 이상 마지막 방어선은 여기여야 한다.
+  verify-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # main과의 조상 관계를 봐야 하므로 전체 이력이 필요하다
+
+      - name: Tag must point into main
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$tag^{commit}" origin/main; then
+            echo "::error::$tag가 가리키는 커밋이 main에 없습니다."
+            echo "머지되지 않았거나 낡은 지점에서 태그를 만든 것입니다."
+            echo "  태그: $(git log -1 --format='%h %s' "$tag^{commit}")"
+            echo "  main: $(git log -1 --format='%h %s' origin/main)"
+            echo "main을 pull한 뒤 다시 태그를 만드세요."
+            exit 1
+          fi
+
+      - name: Tag must match package.json
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          declared="v$(git show "$tag^{commit}:package.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")"
+          if [ "$tag" != "$declared" ]; then
+            echo "::error::태그는 $tag인데 그 커밋의 package.json은 $declared입니다."
+            echo "버전 커밋이 아닌 곳에 태그가 붙었거나, 태그를 손으로 만든 것입니다."
+            exit 1
+          fi
+          echo "$tag — main에 있고 package.json과 일치합니다."
+
   # 매트릭스 빌드 전에 Release를 한 번만 만들어 둔다.
   # 이렇게 하지 않으면 각 OS 잡뿐 아니라 한 잡 안의 여러 퍼블리셔(mac의 zip·dmg 등)가
   # 동시에 Release를 만들려다 먼저 만든 쪽만 성공하고 나머지는 422(already_exists)로
   # 깨진다(자산 유실). Release가 이미 있으면 모두 자산만 업로드한다.
   create-release:
+    needs: verify-tag
     runs-on: ubuntu-latest
     steps:
       - name: Create release if missing
