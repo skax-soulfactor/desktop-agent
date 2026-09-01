@@ -1,46 +1,26 @@
 'use strict'
 
 /**
- * npm version 앞에 서는 가드.
+ * npm version 앞에 서는 가드 — 어디서 올리는지를 본다.
  *
- * 2026-09-01에 세 가지가 한꺼번에 터졌다. 기능 브랜치에서 npm version을 돌려 v0.1.18~v0.1.20
- * 태그를 먼저 써 버렸는데 그 버전 커밋은 머지되지 않아 main의 package.json은 0.1.17에 머물렀고,
- * main에서 patch를 올리자 이미 쓴 태그와 계속 부딪혔다. npm version은 커밋을 먼저 만들고 태그를
- * 나중에 붙이므로 실패한 실행마다 버전 커밋만 쌓였다. 게다가 그 main은 원격보다 뒤처져 있어서,
- * 결국 이번 작업이 하나도 담기지 않은 v0.1.21이 릴리스로 발행됐다.
+ * 2026-09-01에 기능 브랜치에서 올린 v0.1.18~v0.1.20의 버전 커밋이 머지되지 않아 main의
+ * package.json은 0.1.17에 머물렀고, 원격보다 뒤처진 main에서 만든 v0.1.21이 코드가 한 줄도
+ * 바뀌지 않은 릴리스로 발행됐다. 그 둘(브랜치, 동기화)을 여기서 막는다.
  *
- * 셋 다 아래 세 가지 확인으로 막힌다. 정말 필요하면 ALLOW_VERSION=1로 넘어갈 수 있다.
+ * 번호 충돌은 여기서 막지 않는다. preversion은 npm이 올릴 "다음 번호"를 알 수 없어서
+ * 현재 버전만 보고 판단하게 되는데, 그러면 빠져나갈 명령(npm version 0.1.21)까지 같이
+ * 막힌다 — 실제로 그렇게 막혀서 아무것도 낼 수 없는 상태가 됐다. 충돌은 새 번호가 확정된
+ * 뒤인 scripts/version-check.cjs에서 본다.
  */
 
 const { execFileSync } = require('child_process')
 const { version } = require('../package.json')
+const { isGreater, listVersionTags, nextFree } = require('./version-tags.cjs')
 
 const RELEASE_BRANCH = 'main'
 
 function git(...args) {
   return execFileSync('git', args, { encoding: 'utf8' }).trim()
-}
-
-/** "0.1.9"와 "0.1.10"을 문자열로 비교하면 뒤집힌다 */
-function toParts(v) {
-  return v.split('.').map(Number)
-}
-
-function isGreater(a, b) {
-  const [x, y] = [toParts(a), toParts(b)]
-  for (let i = 0; i < 3; i++) {
-    if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0)
-  }
-  return false
-}
-
-/** 아직 쓰지 않은 다음 패치 번호 */
-function nextFree(current, taken) {
-  const [major, minor] = toParts(current)
-  const used = new Set(taken)
-  let patch = toParts(current)[2] + 1
-  while (used.has(major + '.' + minor + '.' + patch)) patch++
-  return major + '.' + minor + '.' + patch
 }
 
 function fail(title, lines) {
@@ -49,7 +29,7 @@ function fail(title, lines) {
   console.error('')
   for (const line of lines) console.error('  ' + line)
   console.error('')
-  console.error('  이 확인을 건너뛰려면: ALLOW_VERSION=1 npm version <patch|minor|major>')
+  console.error('  이 확인을 건너뛰려면: ALLOW_VERSION=1 npm version <새 버전>')
   console.error('')
   process.exit(1)
 }
@@ -59,7 +39,7 @@ if (process.env.ALLOW_VERSION === '1') {
   process.exit(0)
 }
 
-// 1. 릴리스 브랜치인가 — 기능 브랜치에서 올린 버전은 머지에서 빠지고 태그 번호만 태운다
+// 1. 릴리스 브랜치인가 — 기능 브랜치에서 올린 버전 커밋은 PR 머지에서 빠지고 태그 번호만 태운다
 const branch = git('rev-parse', '--abbrev-ref', 'HEAD')
 if (branch !== RELEASE_BRANCH) {
   fail('버전은 ' + RELEASE_BRANCH + '에서만 올립니다. 지금 브랜치: ' + branch, [
@@ -78,8 +58,9 @@ try {
   ])
 }
 
-const counts = git('rev-list', '--left-right', '--count', 'origin/' + RELEASE_BRANCH + '...HEAD')
-const [behind, ahead] = counts.split(/\s+/).map(Number)
+const [behind, ahead] = git('rev-list', '--left-right', '--count', 'origin/' + RELEASE_BRANCH + '...HEAD')
+  .split(/\s+/)
+  .map(Number)
 
 if (behind > 0) {
   fail('로컬 ' + RELEASE_BRANCH + '가 origin보다 ' + behind + '개 뒤처져 있습니다.', [
@@ -96,24 +77,16 @@ if (ahead > 0) {
   ])
 }
 
-// 3. 태그가 package.json보다 앞서 있지 않은가 — 앞서 있으면 patch를 올려도 계속 충돌한다
-const tags = git('tag', '--list', 'v*')
-  .split('\n')
-  .filter(Boolean)
-  .map((t) => t.replace(/^v/, ''))
-  .filter((t) => /^\d+\.\d+\.\d+$/.test(t))
-
+// 3. 번호가 어긋나 있으면 알려만 준다. 막지는 않는다 — 막으면 고칠 방법까지 함께 막힌다.
+const tags = listVersionTags()
 const aheadTags = tags.filter((t) => isGreater(t, version))
+
 if (aheadTags.length > 0) {
-  fail('package.json은 ' + version + '인데 더 높은 태그가 이미 있습니다: ' + aheadTags.map((t) => 'v' + t).join(', '), [
-    '다른 브랜치에서 버전을 올리고 그 커밋이 머지되지 않았을 때 이렇게 됩니다.',
-    '그대로 두면 npm version이 이미 쓴 번호를 다시 만들려다 실패하는데, 실패해도 커밋은 남습니다.',
-    '',
-    '쓸 수 있는 번호로 직접 지정하세요: npm version ' + nextFree(version, tags),
-    '또는 쓰지 않은 태그를 지우세요: git tag -d <태그> && git push origin :refs/tags/<태그>'
-  ])
+  console.warn('')
+  console.warn('! package.json은 ' + version + '인데 더 높은 태그가 이미 있습니다: ' + aheadTags.map((t) => 'v' + t).join(', '))
+  console.warn('  patch로 올리면 이미 쓴 번호와 부딪힙니다. 빈 번호로 직접 지정하세요:')
+  console.warn('    npm version ' + nextFree(version, tags))
+  console.warn('')
 }
 
-console.log(
-  '✓ ' + RELEASE_BRANCH + ' / origin과 동일 / 태그 충돌 없음 — ' + version + '에서 버전을 올립니다'
-)
+console.log('✓ ' + RELEASE_BRANCH + ' / origin과 동일 — ' + version + '에서 버전을 올립니다')
