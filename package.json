@@ -12,6 +12,7 @@
     "start": "node scripts/electron-env.cjs start",
     "icons": "node scripts/make-icons.mjs",
     "preversion": "node scripts/preversion.cjs",
+    "version": "node scripts/version-check.cjs",
     "dist": "electron-vite build && electron-builder",
     "dist:mac": "electron-vite build && electron-builder --mac",
     "dist:win": "electron-vite build && electron-builder --win",
