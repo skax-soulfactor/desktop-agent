@@ -242,6 +242,15 @@ export interface MemoryEntry {
   pinned?: boolean
   /** 'agent' = 자동 추출/도구 저장, 'user' = 사용자가 직접 작성 */
   origin?: 'agent' | 'user'
+  /**
+   * 도구로 아무것도 확인하지 않은 턴에서 나온 기억.
+   *
+   * 에이전트가 그냥 아는 대로 답한 내용이 그대로 지식이 된 적이 있다 — "IntelliJ 릴리스 주기
+   * 6~8주"(사실은 연 3회)가 저장됐고, 다음 IntelliJ 질문에서 회상되어 다시 쓰였다.
+   * 지우는 대신 표시해 둔다: 사용자가 말한 선호·환경은 확인할 도구가 없어도 남겨야 하고,
+   * 남길 때 무엇이 확인된 것이고 무엇이 아닌지는 구분되어야 한다.
+   */
+  unverified?: boolean
   /** 사용자가 점검 대기함에서 확인 완료한 시각 */
   reviewedAt?: string
 }
@@ -258,7 +267,7 @@ export interface MemoryStats {
   injectedChars: number
 }
 
-export type MemoryReviewKind = 'duplicate' | 'stale' | 'malformed' | 'orphan'
+export type MemoryReviewKind = 'duplicate' | 'stale' | 'malformed' | 'orphan' | 'unverified'
 
 /** 점검 대기함 항목 — 룰 기반으로 계산되며 LLM 호출이 없다 */
 export interface MemoryReviewItem {

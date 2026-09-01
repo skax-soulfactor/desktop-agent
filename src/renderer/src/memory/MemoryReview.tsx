@@ -5,7 +5,8 @@ const KIND_LABEL: Record<MemoryReviewKind, string> = {
   duplicate: '중복 의심',
   stale: '노후',
   malformed: '형식 불일치',
-  orphan: '출처 유실'
+  orphan: '출처 유실',
+  unverified: '확인 안 됨'
 }
 
 interface Props {
@@ -65,6 +66,12 @@ export default function MemoryReview({
             {it.kind === 'stale' && <button onClick={() => void onArchive(it.id)}>보관</button>}
             {it.kind === 'malformed' && (
               <button onClick={() => onSelect(it.id)}>편집하러 가기</button>
+            )}
+            {it.kind === 'unverified' && (
+              <>
+                <button onClick={() => onSelect(it.id)}>내용 확인</button>
+                <button onClick={() => void onArchive(it.id)}>보관</button>
+              </>
             )}
             <button className="link" onClick={() => void onReviewed(it.id)}>
               확인함

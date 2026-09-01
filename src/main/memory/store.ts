@@ -28,7 +28,7 @@ export function getMemory(id: string): MemoryEntry | null {
 
 export function createMemory(
   data: Pick<MemoryEntry, 'type' | 'title' | 'content' | 'tags' | 'sourceSessionId'> &
-    Partial<Pick<MemoryEntry, 'origin' | 'pinned'>>
+    Partial<Pick<MemoryEntry, 'origin' | 'pinned' | 'unverified'>>
 ): MemoryEntry {
   const now = new Date().toISOString()
   const entry: MemoryEntry = {
@@ -50,7 +50,15 @@ export function updateMemory(
   patch: Partial<
     Pick<
       MemoryEntry,
-      'type' | 'title' | 'content' | 'tags' | 'status' | 'pinned' | 'reviewedAt' | 'origin'
+      | 'type'
+      | 'title'
+      | 'content'
+      | 'tags'
+      | 'status'
+      | 'pinned'
+      | 'reviewedAt'
+      | 'origin'
+      | 'unverified'
     >
   >
 ): MemoryEntry | null {
@@ -287,7 +295,21 @@ export function needsReview(): MemoryReviewItem[] {
     })
   }
 
-  // 4) 출처 유실 — 근거가 된 대화가 삭제된 기억
+  // 4) 확인 안 됨 — 도구로 아무것도 확인하지 않은 턴에서 나온 기억.
+  // 회상될 때마다 표시가 붙어 나가지만, 사용자가 한 번은 눈으로 보고 판정해야 한다.
+  // 실제로 "IntelliJ 릴리스 주기 6~8주"(사실은 연 3회)가 이렇게 들어와 다음 질문에서 되살아났다.
+  for (const m of active) {
+    if (!m.unverified) continue
+    items.push({
+      kind: 'unverified',
+      id: m.id,
+      title: m.title,
+      type: m.type,
+      reason: '도구로 확인하지 않은 턴에서 저장됐습니다. 에이전트가 그냥 아는 대로 말한 내용일 수 있습니다.'
+    })
+  }
+
+  // 5) 출처 유실 — 근거가 된 대화가 삭제된 기억
   const sessionIds = new Set(listSessions().map((s) => s.id))
   for (const m of active) {
     if (!m.sourceSessionId || sessionIds.has(m.sourceSessionId)) continue
