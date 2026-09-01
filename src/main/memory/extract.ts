@@ -96,14 +96,34 @@ function parseOps(raw: string): z.infer<typeof opsSchema> {
   return result.data
 }
 
+/**
+ * 이번 턴에 도구로 확인한 것이 하나도 없을 때 덧붙이는 규칙.
+ *
+ * 기존 규칙("검증되지 않은 진단이나 해결책을 저장하지 마라")은 진단·해결책만 겨눈다.
+ * "IntelliJ 릴리스 주기는 6~8주" 같은 것은 진단이 아니라 세상 사실이라 그물에 걸리지 않고
+ * 그대로 저장됐다(실제로는 연 3회다). 사실이 아니라 출처를 기준으로 자른다.
+ */
+const UNVERIFIED_RULE = `
+
+## 이번 턴에는 도구로 확인한 것이 하나도 없다
+- 그러므로 에이전트가 설명한 외부 사실은 저장하지 마라 — 제품의 버전·릴리스 주기·가격·정책,
+  도구나 서비스의 동작 원리, 기술적 사실 관계는 확인 없이 지식이 되면 안 된다.
+  에이전트가 확신에 차서 말했든, 출처를 적었든 마찬가지다. 이번 턴에 그 출처를 실제로 연 적이 없다.
+- 사용자가 직접 말한 것만 저장하라: 선호, 사용하는 환경·도구, 요구사항, 결정, 앞으로의 계획.
+  판단 기준은 "누가 말했는가"다. 사용자가 말한 것은 그 자체로 사실이고, 에이전트가 말한 것은 아직 주장이다.
+- 저장할 것이 없으면 ops를 빈 배열로 반환하라. 그것이 이 턴의 정상적인 결과다.`
+
 export async function extractMemories(
   sessionId: string,
   turnTranscript: string,
-  failures: FailureSignal[]
+  failures: FailureSignal[],
+  /** 이번 턴에 결과를 돌려준 도구가 하나라도 있었는가 */
+  verified = false
 ): Promise<MemoryOpSummary[]> {
   // 배경 작업이므로 경량 등급 사용 (미배정 시 일반으로 폴백)
   const { model, config, profile } = await resolveModelFor('light')
-  const system = profile.local ? COMPACT_EXTRACT_PROMPT : EXTRACT_PROMPT
+  const base = profile.local ? COMPACT_EXTRACT_PROMPT : EXTRACT_PROMPT
+  const system = verified ? base : base + UNVERIFIED_RULE
 
   const failureText =
     failures.length > 0
@@ -144,20 +164,26 @@ export async function extractMemories(
   const applied: MemoryOpSummary[] = []
   for (const op of object.ops) {
     if (op.op === 'create' && op.type && op.title && op.content) {
+      // 프롬프트로 걸러지지 않고 넘어온 것도 있다 — 9B 추출기는 규칙을 늘 지키지는 않는다.
+      // 지우지 않고 표시해 둔다. 회상에서 "확인 안 됨"으로 붙어 나가고 출처로는 쓰이지 못한다.
       const created = createMemory({
         type: op.type,
         title: op.title,
         content: op.content,
         tags: op.tags ?? [],
-        sourceSessionId: sessionId
+        sourceSessionId: sessionId,
+        ...(verified ? {} : { unverified: true })
       })
       applied.push({ op: 'create', type: op.type, title: op.title, id: created.id })
     } else if (op.op === 'update' && op.id) {
+      // 확인된 턴의 갱신은 표시를 걷어내고, 확인 없는 턴의 갱신은 표시를 남긴다.
+      // 미확인 내용이 기존 기억에 덧씌워지면 그 기억도 더는 확인된 것이 아니다.
       const updated = updateMemory(op.id, {
         ...(op.type ? { type: op.type } : {}),
         ...(op.title ? { title: op.title } : {}),
         ...(op.content ? { content: op.content } : {}),
-        ...(op.tags ? { tags: op.tags } : {})
+        ...(op.tags ? { tags: op.tags } : {}),
+        ...(op.content ? { unverified: !verified } : {})
       })
       if (updated)
         applied.push({ op: 'update', type: updated.type, title: updated.title, id: updated.id })

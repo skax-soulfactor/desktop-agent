@@ -594,8 +594,17 @@ export async function runTurn(
     addSessionUsage(sessionId, usage.input, usage.output)
     send({ type: 'turn-end', unresolvedToolCallIds: unresolvedIds, usage })
 
+    // 이번 턴에 실제로 결과를 돌려준 도구가 있었는가. 없었다면 에이전트가 한 말은 전부
+    // 자기 기억에서 나온 것이고, 그것이 지식베이스로 넘어가면 다음 턴에서 근거처럼 되살아난다.
+    const verified = newItems.some((it) => it.kind === 'tool' && it.status === 'done')
+
     // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다. 실패는 삼키지 않고 화면에 알린다
-    void extractMemories(sessionId, buildTranscript(userText + attachNote, newItems), ctx.failures)
+    void extractMemories(
+      sessionId,
+      buildTranscript(userText + attachNote, newItems),
+      ctx.failures,
+      verified
+    )
       .then((ops) => {
         if (ops.length > 0) {
           appendToSession(sessionId, [{ kind: 'memory', ops }], [])
