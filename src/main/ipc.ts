@@ -1,7 +1,7 @@
 import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 import { readFileSync, writeFileSync } from 'fs'
 import type { ApprovalDecision, AttachmentPayload, ProviderConfig } from '@shared/types'
-import { runTurn, abortTurn, isTurnRunning, currentMemoryBudget } from './agent/loop'
+import { runTurn, abortTurn, turnStartedAt, currentMemoryBudget } from './agent/loop'
 import { listTasks, cancelTask } from './agent/tasks'
 import { respondClarify, pendingClarifications } from './agent/clarify'
 import { listSchedules, deleteSchedule, setScheduleEnabled } from './agent/scheduler'
@@ -82,7 +82,7 @@ export function registerIpc(getWin: () => BrowserWindow): void {
     void runTurn(getWin(), sessionId, text, attachments ?? [])
   })
   ipcMain.handle('chat:abort', (_e, sessionId: string) => abortTurn(sessionId))
-  ipcMain.handle('chat:isRunning', (_e, sessionId: string) => isTurnRunning(sessionId))
+  ipcMain.handle('chat:turnStartedAt', (_e, sessionId: string) => turnStartedAt(sessionId))
 
   // 백그라운드 작업 (서브 에이전트)
   ipcMain.handle('tasks:list', (_e, sessionId?: string) => listTasks(sessionId))

@@ -186,6 +186,11 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
   const [progress, setProgress] = useState<{ label: string; kind: 'thinking' | 'tool' } | null>(null)
   /** 진행 표시에 곁들일 경과 시간(초) */
   const [elapsed, setElapsed] = useState(0)
+  /**
+   * 진행 중인 턴이 시작된 시각(epoch ms). 메인 프로세스가 진짜 출처이므로
+   * 다른 화면에 갔다 와서 이 뷰가 다시 마운트돼도 경과 시간이 0으로 돌아가지 않는다.
+   */
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
   const [runningTasks, setRunningTasks] = useState<TaskInfo[]>([])
   /** 실시간 과정을 펼쳐 보는 진행 중 작업 id */
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
@@ -300,6 +305,8 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
       if (e.type === 'turn-start') {
         setBusy(true)
         setError(null)
+        // 보낼 때 이미 시계를 켰다면 그대로 둔다 (여기서 덮으면 몇백 ms가 되감긴다)
+        setTurnStartedAt((prev) => prev ?? Date.now())
         setProgress({ label: '생각하고 있어요', kind: 'thinking' })
       } else if (e.type === 'text-delta') {
         // 텍스트가 실시간으로 흐르는 동안에는 스트리밍 자체가 진행 표시이므로 인디케이터를 감춘다
@@ -367,6 +374,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
         }
       } else if (e.type === 'turn-end') {
         setBusy(false)
+        setTurnStartedAt(null)
         setProgress(null)
         if (e.error) setError(e.error)
         // 이 턴의 토큰 사용량을 마지막 에이전트 메시지에 귀속 (저장본과 동일한 위치)
@@ -407,14 +415,16 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
 
   // 응답 대기 중 경과 시간 1초마다 갱신 (진행 표시에 곁들인다)
   useEffect(() => {
-    if (!busy) {
+    if (!busy || turnStartedAt === null) {
       setElapsed(0)
       return
     }
-    const start = Date.now()
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000)
+    // 마운트 직후 바로 한 번 맞춰 둬야 화면을 다시 열었을 때 1초를 기다리지 않는다
+    const tick = (): void => setElapsed(Math.max(0, Math.floor((Date.now() - turnStartedAt) / 1000)))
+    tick()
+    const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [busy])
+  }, [busy, turnStartedAt])
 
   // 대화 기록 검색 (디바운스)
   useEffect(() => {
@@ -492,9 +502,12 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
       setError(null)
       setQuote(null)
       setSelPop(null)
-      // 버튼 상태를 이벤트가 아닌 실제 실행 여부로 동기화 (세션 전환·이벤트 누락 시 desync 방지)
-      const running = await window.api.chatIsRunning(id)
+      // 버튼 상태와 경과 시간을 이벤트가 아닌 실제 실행 여부로 동기화
+      // (세션 전환·화면 이동으로 재마운트될 때 desync 방지)
+      const startedAt = await window.api.chatTurnStartedAt(id)
+      const running = startedAt !== null
       setBusy(running)
+      setTurnStartedAt(startedAt)
       setProgress(running ? { label: '생각하고 있어요', kind: 'thinking' } : null)
       setRunningTasks((await window.api.listTasks(id)).filter((t) => t.status === 'running'))
     }
@@ -513,6 +526,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
     setActiveId(s.meta.id)
     setItems([])
     setBusy(false)
+    setTurnStartedAt(null)
     setProgress(null)
     setRunningTasks([])
   }
@@ -599,6 +613,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
       }
     ])
     setBusy(true)
+    setTurnStartedAt(Date.now())
   }
 
   const sideLabel = prefs.side === 'left' ? '오른쪽' : '왼쪽'

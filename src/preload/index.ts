@@ -38,8 +38,8 @@ const api: DesktopAgentApi = {
   chatSend: (sessionId: string, text: string, attachments?: AttachmentPayload[]): Promise<void> =>
     ipcRenderer.invoke('chat:send', sessionId, text, attachments),
   chatAbort: (sessionId: string): Promise<void> => ipcRenderer.invoke('chat:abort', sessionId),
-  chatIsRunning: (sessionId: string): Promise<boolean> =>
-    ipcRenderer.invoke('chat:isRunning', sessionId),
+  chatTurnStartedAt: (sessionId: string): Promise<number | null> =>
+    ipcRenderer.invoke('chat:turnStartedAt', sessionId),
 
   listTasks: (sessionId?: string): Promise<TaskInfo[]> => ipcRenderer.invoke('tasks:list', sessionId),
   cancelTask: (taskId: string): Promise<boolean> => ipcRenderer.invoke('tasks:cancel', taskId),
