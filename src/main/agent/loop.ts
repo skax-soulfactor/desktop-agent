@@ -37,7 +37,7 @@ function mainAgentTools(profile: ModelProfile): string[] {
   return profile.local ? base : [...base, 'http_request']
 }
 
-const activeTurns = new Map<string, AbortController>()
+const activeTurns = new Map<string, { abort: AbortController; startedAt: number }>()
 
 /** 컨텍스트 부족 경고를 세션당 한 번만 띄우기 위한 표시 */
 const contextWarned = new Set<string>()
@@ -54,12 +54,15 @@ export function currentMemoryBudget(): number | undefined {
 }
 
 export function abortTurn(sessionId: string): void {
-  activeTurns.get(sessionId)?.abort()
+  activeTurns.get(sessionId)?.abort.abort()
 }
 
-/** 렌더러가 버튼 상태를 이벤트가 아닌 실제 실행 여부로 동기화할 수 있게 하는 진짜 출처 */
-export function isTurnRunning(sessionId: string): boolean {
-  return activeTurns.has(sessionId)
+/**
+ * 렌더러가 버튼 상태와 경과 시간을 이벤트가 아닌 실제 실행 여부로 동기화할 수 있게 하는 진짜 출처.
+ * 시작 시각(epoch ms)을 함께 돌려주므로 화면을 옮겼다 돌아와도 진행 시간이 이어진다.
+ */
+export function turnStartedAt(sessionId: string): number | null {
+  return activeTurns.get(sessionId)?.startedAt ?? null
 }
 
 /**
@@ -409,7 +412,7 @@ export async function runTurn(
   }
 
   const abort = new AbortController()
-  activeTurns.set(sessionId, abort)
+  activeTurns.set(sessionId, { abort, startedAt: Date.now() })
 
   const ctx: TurnContext = { sessionId, win, failures: [] }
 

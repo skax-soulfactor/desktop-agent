@@ -48,7 +48,8 @@ export interface SessionDataDto {
 export interface DesktopAgentApi {
   chatSend(sessionId: string, text: string, attachments?: AttachmentPayload[]): Promise<void>
   chatAbort(sessionId: string): Promise<void>
-  chatIsRunning(sessionId: string): Promise<boolean>
+  /** 진행 중인 턴의 시작 시각(epoch ms). 진행 중이 아니면 null */
+  chatTurnStartedAt(sessionId: string): Promise<number | null>
 
   listTasks(sessionId?: string): Promise<TaskInfo[]>
   cancelTask(taskId: string): Promise<boolean>
