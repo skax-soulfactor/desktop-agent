@@ -51,6 +51,19 @@ function mainAgentTools(profile: ModelProfile): string[] {
 
 const activeTurns = new Map<string, { abort: AbortController; startedAt: number }>()
 
+/**
+ * 모델별 프롬프트 추정 보정 계수 — 실제 프롬프트 토큰 / 우리가 추정한 값.
+ *
+ * 추정은 구조적으로 낮게 나온다. 도구 스키마는 근사값이고, 히스토리는 JSON.stringify로 재는데
+ * 실제로는 챗 템플릿이 역할 표시와 도구 호출 래퍼를 덧붙인다. 그 차이만큼 프롬프트가 창을
+ * 넘어서면 남는 자리가 없어 생성이 문장 중간에서 끊긴다(finishReason=length). 실제로 그렇게
+ * 잘린 턴을 확인했다 — 계획은 스텝당 5,888토큰인데 실측은 7,500이었다.
+ *
+ * 그래서 추정을 더 정교하게 만드는 대신, 매 턴 첫 스텝의 실제 입력 토큰 수를 받아 비율을
+ * 기억하고 다음 턴 예산을 그만큼 줄인다. 모델이나 프로바이더가 바뀌어도 저절로 맞춰진다.
+ */
+const promptScale = new Map<string, number>()
+
 /** 컨텍스트 부족 경고를 세션당 한 번만 띄우기 위한 표시 */
 const contextWarned = new Set<string>()
 
@@ -282,15 +295,19 @@ function baseSystemPrompt(sessionId: string, profile: ModelProfile): string {
 
 /**
  * 도구 정의가 프롬프트에서 차지하는 몫. 이름·설명은 그대로 계산하고, 인자 스키마는
- * 도구당 80토큰으로 근사한다 (JSON Schema 직렬화 결과를 여기서 다시 만들지 않기 위한 값 —
- * qwen3.5 토크나이저 실측에서 도구당 60~100토큰). 게이트 도구에는 purpose 설명이 통째로 붙는다.
+ * 도구당 120토큰으로 근사한다. 처음에는 80으로 잡았는데 실측(도구 4종을 붙였다 뗀 프롬프트
+ * 토큰 차이)에서 실제는 도구당 227토큰, 추정은 188토큰이었다 — 스키마 몫이 80이 아니라 119다.
+ * 게이트 도구에는 purpose 설명이 통째로 붙는다.
+ *
+ * 이 값이 낮으면 프롬프트가 창을 넘겨 답변이 문장 중간에서 잘린다. 근사가 남기는 오차는
+ * 아래 promptScale이 실측으로 마저 메운다.
  */
 function estimateToolTokens(tools: ToolSet): number {
   const purposeTokens = estimateTokens(PURPOSE_DESCRIPTION)
   let total = 0
   for (const [name, def] of Object.entries(tools)) {
     const { description } = def as unknown as { description?: unknown }
-    total += estimateTokens(name + (typeof description === 'string' ? description : '')) + 80
+    total += estimateTokens(name + (typeof description === 'string' ? description : '')) + 120
     if (toolDefByName(name)) total += purposeTokens
   }
   return total
@@ -470,6 +487,49 @@ function citedOwnWrites(items: ChatItem[]): string[] {
   return [...cited]
 }
 
+/**
+ * 턴이 제자리를 돌고 있다고 볼 신호의 개수. 이만큼 쌓이면 턴을 끊는다.
+ *
+ * 2로 잡은 근거: 루프에 빠진 실제 턴에서 신호가 두 번 쌓인 시점에 사용자가 손으로 멈췄다.
+ * 이미 답을 받아 둔 것을 다시 묻거나 같은 문단을 다시 쓰는 것은 빠져나오지 못한다는 뜻이다.
+ */
+const REPEAT_LIMIT = 2
+
+/**
+ * 같은 문단을 되풀이하는지 보기 위한 비교용 열쇠. 비교할 가치가 없으면 null.
+ *
+ * 도구 호출 차단만 세었더니 놓쳤다 — 모델은 호출 인자를 조금씩 바꿔 차단을 피하면서
+ * 본문은 같은 문단을 그대로 다시 썼다. 세는 대상이 어긋나 있었다.
+ *
+ * 앞부분만 견주는 이유: 반복된 문단은 대개 뒤가 잘린 채 끝나서(길이 제한) 전문이 일치하지
+ * 않는다. 짧은 진행 안내("로그를 확인하겠습니다")는 되풀이돼도 정상이므로 길이로 걸러낸다.
+ */
+function textKey(text: string): string | null {
+  const norm = text.replace(/\s+/g, ' ').trim()
+  return norm.length < 60 ? null : norm.slice(0, 120)
+}
+
+/**
+ * 'stop'이 아닌 종료 사유를 사용자의 말로 옮긴다. null이면 정상 종료라 알릴 것이 없다.
+ *
+ * 답변이 문장 중간에서 끊기는 일이 반복됐는데, 앱이 종료 사유를 보지 않아 매번 원인을
+ * 추측해야 했다. 사유마다 사용자가 할 수 있는 일이 다르므로 그것까지 적어 준다.
+ */
+function describeFinish(reason: string, maxSteps: number): string | null {
+  if (reason === 'stop') return null
+  if (reason === 'length')
+    return (
+      '답변이 길이 제한에 걸려 중간에서 끊겼습니다. ' +
+      '"이어서 진행해줘"로 이어 받거나, 설정 > LLM 프로바이더에서 컨텍스트를 넉넉히 잡아 주세요.'
+    )
+  if (reason === 'tool-calls')
+    return (
+      `도구를 ${maxSteps}번 호출하고도 결론에 이르지 못해 중간에 멈췄습니다. ` +
+      '무엇을 확인해야 하는지 좁혀서 다시 물어봐 주세요.'
+    )
+  return `답변이 정상적으로 끝나지 않았습니다 (종료 사유: ${reason}). 이어서 물어봐 주세요.`
+}
+
 export async function runTurn(
   win: BrowserWindow,
   sessionId: string,
@@ -562,12 +622,15 @@ export async function runTurn(
       )
     }
     const toolTokens = estimateToolTokens(tools)
+    // 지난 턴들이 알려 준 실제/추정 비율만큼 예산을 미리 줄여 둔다
+    const scale = promptScale.get(config.model) ?? 1
+    const budget = Math.floor(profile.promptBudget / scale)
 
     const base = baseSystemPrompt(sessionId, profile)
     // 지식베이스는 남는 예산 안에서만 주입한다. 시스템 프롬프트와 도구 스키마가 먼저이고,
     // 히스토리도 최소 한 턴은 들어가야 하므로 기억에는 그중 일부만 준다.
     const memoryBudget = profile.local
-      ? Math.max(0, Math.floor((profile.promptBudget - estimateTokens(base) - toolTokens) * 0.3))
+      ? Math.max(0, Math.floor((budget - estimateTokens(base) - toolTokens) * 0.3))
       : undefined
     lastMemoryBudget = memoryBudget
     const memoryContext =
@@ -575,7 +638,7 @@ export async function runTurn(
     const system = memoryContext ? `${base}\n\n${memoryContext}` : base
 
     // 남은 예산만큼만 과거 대화를 싣는다 — 넘기면 서버가 앞부분을 조용히 잘라낸다
-    const historyBudget = profile.promptBudget - estimateTokens(system) - toolTokens
+    const historyBudget = budget - estimateTokens(system) - toolTokens
     const messages = trimHistory(messagesForModel, historyBudget, sessionId)
 
     // 조용히 잘려 이상한 답이 나오는 것보다, 무엇을 바꿔야 하는지 알리는 편이 낫다.
@@ -591,11 +654,38 @@ export async function runTurn(
       system,
       messages,
       tools,
-      stopWhen: stepCountIs(profile.maxSteps),
+      stopWhen: [
+        stepCountIs(profile.maxSteps),
+        // 같은 조회만 되풀이하는 턴은 스스로 끝나지 않는다. 차단이 쌓이면 여기서 끊는다.
+        (): boolean => spinning() >= REPEAT_LIMIT
+      ],
       ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
       ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
       abortSignal: abort.signal
     })
+
+    // 턴이 어떤 이유로 끝났는가. 앱이 finishReason을 보지 않아, 문장 중간에서 끊긴 답변과
+    // 정상 종료를 구분할 수단이 없었다. 'stop'이 아닌 모든 종료는 사용자에게 알린다 —
+    // 무엇 때문에 멈췄는지 모르면 사용자에게는 앱이 답을 하다 만 것으로만 보인다.
+    let finishReason = 'stop'
+    // 이번 턴에 나온 본문 문단들. 같은 문단이 다시 나오면 제자리를 돌고 있는 것이다
+    const seenTexts = new Set<string>()
+    let repeatedTexts = 0
+    /** 지금까지 쌓인 '제자리 돌기' 신호 — 도구 재조회 차단과 문단 반복을 함께 센다 */
+    const spinning = (): number => (ctx.repeatedCalls ?? 0) + repeatedTexts
+    /** 본문 한 덩이가 끝나는 자리에서 호출한다 (도구 호출 직전, 그리고 턴 끝) */
+    const noteTextBlock = (): void => {
+      const key = textBlock ? textKey(textBlock.text) : null
+      if (!key) return
+      if (seenTexts.has(key)) repeatedTexts++
+      else seenTexts.add(key)
+    }
+    // 첫 스텝의 실제 입력 토큰 — 우리 추정이 얼마나 낮았는지 재는 데 쓴다
+    const planned =
+      estimateTokens(system) +
+      toolTokens +
+      messages.reduce((n, m) => n + estimateTokens(JSON.stringify(m)), 0)
+    let firstStepInput = 0
 
     for await (const part of result.fullStream) {
       if (part.type === 'text-delta') {
@@ -612,6 +702,7 @@ export async function runTurn(
         }
         toolItems.set(part.toolCallId, item)
         newItems.push(item)
+        noteTextBlock()
         textBlock = null
         send({ type: 'tool-call', toolCallId: part.toolCallId, toolName: part.toolName, summary })
       } else if (part.type === 'tool-result') {
@@ -632,11 +723,26 @@ export async function runTurn(
         // SDK가 오류를 모델에 되돌려 주므로 대화는 이어지지만, 카드를 확정하고
         // 실패 신호를 남기지 않으면 '실행 중'으로 굳어 버린다.
         const message = part.error instanceof Error ? part.error.message : String(part.error)
-        const item = toolItems.get(part.toolCallId)
-        if (item) {
-          item.status = 'error'
-          item.output = message.slice(0, 2000)
+        let item = toolItems.get(part.toolCallId)
+        if (!item) {
+          // tool-call 파트 없이 tool-error만 오는 경우가 있다(없는 도구 이름, 스키마 위반).
+          // 여기서 카드를 만들지 않으면 화면에도 세션에도 아무것도 남지 않는다 — 렌더러는
+          // 짝이 맞는 toolCallId만 갱신하므로 뒤따르는 이벤트도 버려진다. 그러면 사용자에게는
+          // 답변이 문장 중간에서 끊긴 것으로만 보이고, 무엇이 실패했는지 알 길이 사라진다.
+          const summary = summarizeCall(part.toolName, (part as { input?: unknown }).input)
+          item = {
+            kind: 'tool',
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            summary,
+            status: 'running'
+          }
+          toolItems.set(part.toolCallId, item)
+          newItems.push(item)
+          send({ type: 'tool-call', toolCallId: part.toolCallId, toolName: part.toolName, summary })
         }
+        item.status = 'error'
+        item.output = message.slice(0, 2000)
         ctx.failures.push({ kind: 'tool-error', detail: `${part.toolName} — ${message.slice(0, 200)}` })
         send({
           type: 'tool-result',
@@ -644,10 +750,17 @@ export async function runTurn(
           status: 'error',
           output: message.slice(0, 2000)
         })
+      } else if (part.type === 'finish-step') {
+        if (!firstStepInput) firstStepInput = part.usage?.inputTokens ?? 0
+      } else if (part.type === 'finish') {
+        finishReason = part.finishReason
       } else if (part.type === 'error') {
         throw part.error instanceof Error ? part.error : new Error(String(part.error))
       }
     }
+
+    // 마지막 본문 덩이도 센다 — 턴을 끊기엔 늦지만, 되풀이했다는 사실은 알려야 한다
+    noteTextBlock()
 
     // 히스토리 반영 — 디스크 최신 상태에 append (동시 기록 안전)
     const [response, totalUsage] = await Promise.all([result.response, result.totalUsage])
@@ -671,6 +784,21 @@ export async function runTurn(
     appendToSession(sessionId, newItems, response.messages)
     addSessionUsage(sessionId, usage.input, usage.output)
     send({ type: 'turn-end', unresolvedToolCallIds: unresolvedIds, usage })
+
+    // 다음 턴 예산을 실측으로 보정한다. 창을 넘기는 쪽만 막으면 되므로 1 미만으로는 내리지 않는다
+    if (firstStepInput > 0 && planned > 0) {
+      promptScale.set(config.model, Math.min(3, Math.max(1, firstStepInput / planned)))
+    }
+
+    // 깔끔하게 끝나지 않은 턴 — 조용히 두면 사용자는 앱이 답을 하다 만 것으로만 본다
+    const incomplete =
+      spinning() >= REPEAT_LIMIT
+        ? '같은 내용을 되풀이하기만 해서 중간에 멈췄습니다. 무엇을 확인해야 하는지 좁혀서 다시 물어봐 주세요.'
+        : describeFinish(finishReason, profile.maxSteps)
+    if (incomplete) {
+      appendToSession(sessionId, [{ kind: 'notice', text: incomplete }], [])
+      send({ type: 'notice', text: incomplete })
+    }
 
     // 자기가 쓴 파일을 출처로 단 경우 — 모델이 규칙을 따르지 않으므로 결과를 보고 사용자에게 알린다
     const selfCited = citedOwnWrites(newItems)

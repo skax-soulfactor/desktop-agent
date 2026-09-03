@@ -1,9 +1,10 @@
 import { z } from 'zod'
-import { exec, execFile, execSync } from 'child_process'
+import { exec, execFile } from 'child_process'
 import { existsSync } from 'fs'
 import { homedir, platform } from 'os'
 import { join, resolve } from 'path'
 import type { DesktopToolDef } from './defs'
+import { decodeText } from './encoding'
 
 const MAX_OUTPUT = 100 * 1024
 
@@ -29,69 +30,16 @@ function truncate(s: string): string {
   return s.length > MAX_OUTPUT ? s.slice(0, MAX_OUTPUT) + '\n...[출력 잘림]' : s
 }
 
-/** 콘솔 코드페이지 → TextDecoder 라벨. 여기 없는 코드페이지는 UTF-8로 둔다 */
-const CODEPAGE_LABEL: Record<string, string> = {
-  '932': 'shift_jis',
-  '936': 'gbk',
-  '949': 'euc-kr',
-  '950': 'big5',
-  '1250': 'windows-1250',
-  '1251': 'windows-1251',
-  '1252': 'windows-1252',
-  '1253': 'windows-1253',
-  '1254': 'windows-1254',
-  '1255': 'windows-1255',
-  '1256': 'windows-1256',
-  '866': 'ibm866'
-}
-
-let oemLabel: string | null | undefined
-
-/** Windows 콘솔의 기본 코드페이지를 한 번만 알아낸다 (chcp 호출은 깨진 출력이 나올 때만) */
-function oemDecoderLabel(): string | null {
-  if (oemLabel !== undefined) return oemLabel
-  oemLabel = null
-  if (platform() === 'win32') {
-    try {
-      // "Active code page: 949" / "현재 코드 페이지: 949"
-      const out = execSync('chcp.com', { encoding: 'utf-8', timeout: 5000, windowsHide: true })
-      const cp = out.match(/(\d{3,5})/)?.[1]
-      if (cp) oemLabel = CODEPAGE_LABEL[cp] ?? null
-    } catch {
-      // 알아내지 못하면 UTF-8로 둔다 — 진단 실패가 명령 실행을 막으면 안 된다
-    }
-  }
-  return oemLabel
-}
-
-/**
- * 명령 출력을 문자열로 만든다.
- *
- * Windows의 기본 콘솔 도구(tasklist, sc, systeminfo 등)는 UTF-8이 아니라 시스템 코드페이지로
- * 출력한다. 한국어 Windows에서 "이미지 이름"이 "�̹��� �̸�"로 모델에 전달되던 원인이다.
- * 다만 git·node처럼 UTF-8로 내보내는 도구도 섞여 있어 코드페이지를 일괄 적용할 수는 없다.
- * 그래서 UTF-8로 먼저 읽고, 대체 문자(U+FFFD)가 나올 때만 코드페이지로 다시 읽는다.
- */
-function decodeOutput(buf: Buffer | string): string {
-  if (typeof buf === 'string') return buf
-  const utf8 = buf.toString('utf-8')
-  if (!utf8.includes('�')) return utf8
-  const label = oemDecoderLabel()
-  if (!label) return utf8
-  try {
-    return new TextDecoder(label).decode(buf)
-  } catch {
-    return utf8
-  }
-}
-
 export const shellExec: DesktopToolDef<
   z.ZodObject<{ command: z.ZodString; cwd: z.ZodOptional<z.ZodString> }>
 > = {
   name: 'shell_exec',
   description:
     '셸 명령을 실행한다. cwd 미지정 시 홈 디렉토리에서 실행. 타임아웃 120초, 인터랙티브 명령 불가. ' +
-    'sudo·su·pkexec·runas 등 권한 상승은 이 도구로 할 수 없다(차단됨) — shell_exec_elevated를 쓴다.',
+    'sudo·su·pkexec·runas 등 권한 상승은 이 도구로 할 수 없다(차단됨) — shell_exec_elevated를 쓴다. ' +
+    '서비스·서버가 뜨지 않거나 연결되지 않는 문제는 status 명령 결과만으로 판단하지 마라. ' +
+    '제품의 로그 파일을 찾아 읽어라 — 상태는 "실행 중"인데 기능 로딩이 실패해 ' +
+    '아무것도 서빙하지 않는 경우가 있다.',
   risk: 'execute',
   inputSchema: z.object({
     command: z.string(),
@@ -120,8 +68,8 @@ export const shellExec: DesktopToolDef<
       ): void => {
         resolvePromise({
           exitCode: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
-          stdout: truncate(decodeOutput(stdout)),
-          stderr: truncate(decodeOutput(stderr)),
+          stdout: truncate(decodeText(stdout)),
+          stderr: truncate(decodeText(stderr)),
           timedOut: error?.killed === true
         })
       }

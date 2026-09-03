@@ -70,6 +70,11 @@ export interface TurnContext {
    */
   resultChars?: number
   /**
+   * 같은 조회가 반복돼 차단된 횟수. 되풀이만 하는 턴을 끊는 신호로 쓴다 —
+   * 차단해도 모델이 같은 문단을 계속 내는 경우가 있어, 결국 사용자가 손으로 멈춰야 했다.
+   */
+  repeatedCalls?: number
+  /**
    * 사람이 지켜보지 않는 경로(예약 실행·피어 위임)에서 도는 턴인가.
    * 참이면 상승 도구가 아예 노출되지 않고, 뚫고 들어와도 게이트웨이에서 거부된다.
    */
@@ -185,6 +190,19 @@ function withPurpose(schema: z.ZodTypeAny): z.ZodTypeAny {
  */
 export function buildTools(ctx: TurnContext, only?: string[]): ToolSet {
   const tools: ToolSet = {}
+  /**
+   * 이번 턴에 이미 답이 나온 조회. 같은 조회를 되풀이하는 것을 막는다.
+   *
+   * 실제로 한 턴에서 같은 디렉토리 목록을 두 번 받고, 그 목록에 답이 있는데도
+   * 없는 경로를 두 번 더 찾은 적이 있다. 조사 결과를 누적하라는 규칙은 프롬프트에
+   * 있지만 작은 모델은 따르지 않는다. 되풀이 자체를 막고, 이미 했다는 사실을
+   * 결과에 실어 돌려준다.
+   *
+   * 읽기 도구(fs_read·fs_list)만 담는다. 그리고 쓰기·실행 도구가 성공하면 통째로
+   * 비운다 — 그 사이에 바깥이 바뀌었을 수 있어 이전 결과를 더는 믿을 수 없다.
+   * (buildTools는 턴당 한 번 호출되므로 이 Map의 수명이 곧 턴이다)
+   */
+  const readCache = new Map<string, unknown>()
   const defs = allToolDefs
     .filter((d) => !only || only.includes(d.name))
     // 상승 도구는 기능이 켜져 있고 사람이 지켜보는 턴에서만 모델에게 보인다.
@@ -199,6 +217,20 @@ export function buildTools(ctx: TurnContext, only?: string[]): ToolSet {
         const { purpose, ...rest } = (raw ?? {}) as Record<string, unknown>
         const input = rest
         const summary = def.describeCall(input)
+
+        // 키 순서가 흔들려도 같은 호출로 보이도록 정렬한다 (도구 입력은 모두 평평한 객체다)
+        const cacheKey = `${def.name} ${JSON.stringify(input, Object.keys(input).sort())}`
+        if (def.risk === 'read' && readCache.has(cacheKey)) {
+          ctx.repeatedCalls = (ctx.repeatedCalls ?? 0) + 1
+          // 이미 승인받고 실행해 성공한 것과 완전히 같은 호출이므로 승인 창도 다시 띄우지 않는다
+          return {
+            repeated: true,
+            note:
+              '이번 턴에 이미 같은 조회를 했다. 아래는 그때 받은 결과다. ' +
+              '같은 것을 또 부르지 말고, 이 결과를 근거로 다음 단계로 넘어가라.',
+            result: readCache.get(cacheKey)
+          }
+        }
         // 승인 화면에 보여줄 값을 만드는 단계 — 여기서 실패하면 사용자를 부르기 전에 돌려보낸다
         let argv: string[] | undefined
         let target = ''
@@ -228,9 +260,14 @@ export function buildTools(ctx: TurnContext, only?: string[]): ToolSet {
         }
         try {
           const result = await def.execute(input)
-          if (!ctx.resultChars) return result
-          // 먼저 큰 텍스트를 문서로 빼내고, 그래도 남는 부분만 줄인다
-          return capOutput(offloadLargeText(result, ctx.resultChars, ctx, summary), ctx.resultChars)
+          const capped = ctx.resultChars
+            ? capOutput(offloadLargeText(result, ctx.resultChars, ctx, summary), ctx.resultChars)
+            : result
+          // 성공한 조회만 기억한다. 실패는 담지 않는다 — 그 사이에 파일이 생기면 답이 달라진다
+          if (def.risk === 'read') readCache.set(cacheKey, capped)
+          // 바깥 상태를 바꿨을 수 있는 도구가 돌았다면 앞선 조회 결과는 더는 사실이 아니다
+          else readCache.clear()
+          return capped
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
           ctx.failures.push({ kind: 'tool-error', detail: `${summary} — ${msg}` })
