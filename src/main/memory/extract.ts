@@ -69,6 +69,34 @@ const COMPACT_EXTRACT_PROMPT = `너는 데스크톱 에이전트의 기억 관�
 아래 JSON만 출력하라. 설명·인사·코드 펜스 금지.
 {"ops":[{"op":"create","type":"user","title":"한 줄 요약","content":"본문","tags":["태그"]}]}`
 
+/**
+ * 출력 상한에 걸려 끊긴 ops 배열을 마지막으로 온전한 op까지 되살린다.
+ *
+ * 잘린 출력은 `{"ops":[{...},{...` 꼴이고, 여기서 마지막 닫는 중괄호까지 잘라 온 문자열은 배열과
+ * 바깥 객체가 닫히지 않은 채 끝난다. JSON.parse는 이것을 "Expected ',' or ']' after array element"로
+ * 거부한다 — 9B 추출기에서 실제로 나오는 실패다. 닫아 주면 앞선 op들은 살아난다.
+ *
+ * 종전 복구 코드는 닫는 중괄호가 아예 없을 때(end <= start)만 동작하게 돼 있어 한 번도 걸리지
+ * 않았다. 그 조건이면 그 앞의 "}," 탐색도 반드시 실패하기 때문이다.
+ *
+ * 뒤에서부터 닫는 중괄호 자리를 옮겨 가며 "]}"를 붙여 보고 처음 성공하는 것을 쓴다. 문자열 값
+ * 안에 있던 중괄호를 잘못 고른 경우는 파싱이 실패하므로 자연히 걸러진다. 되살리지 못하면
+ * undefined — 그때는 원래의 파싱 오류를 그대로 알린다.
+ */
+function salvageTruncatedOps(body: string): unknown {
+  let cut = body.length
+  for (let i = 0; i < 20; i++) {
+    const close = body.lastIndexOf('}', cut - 1)
+    if (close <= 0) return undefined
+    try {
+      return JSON.parse(`${body.slice(0, close + 1)}]}`)
+    } catch {
+      cut = close
+    }
+  }
+  return undefined
+}
+
 /** 모델이 코드 펜스나 사족을 붙여도 JSON 본문만 골라 파싱한다 (구조화 출력 미지원 모델 호환) */
 function parseOps(raw: string): z.infer<typeof opsSchema> {
   // 로컬 사고형 모델(qwen3 계열 등)은 <think> 블록을 본문 앞에 붙인다.
@@ -79,18 +107,21 @@ function parseOps(raw: string): z.infer<typeof opsSchema> {
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (fence) text = fence[1].trim()
   const start = text.indexOf('{')
-  let end = text.lastIndexOf('}')
-  // 출력 상한에 걸려 끊긴 JSON — 마지막으로 온전한 op까지만 복구한다.
-  // 실패로 버리면 이번 턴의 기억이 통째로 사라진다.
-  if (start >= 0 && end <= start) {
-    const lastOp = text.lastIndexOf('},')
-    if (lastOp > start) {
-      text = `${text.slice(0, lastOp + 1)}]}`
-      end = text.length - 1
-    }
-  }
+  const end = text.lastIndexOf('}')
   if (start < 0 || end <= start) throw new Error(`JSON 없음: ${raw.slice(0, 120)}`)
-  const parsed: unknown = JSON.parse(text.slice(start, end + 1))
+
+  const body = text.slice(start, end + 1)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch (e) {
+    const salvaged = salvageTruncatedOps(body)
+    if (salvaged === undefined) {
+      const why = e instanceof Error ? e.message : String(e)
+      throw new Error(`JSON 파싱 실패: ${why} — ${raw.slice(0, 120)}`)
+    }
+    parsed = salvaged
+  }
   const result = opsSchema.safeParse(parsed)
   if (!result.success) throw new Error(`형식 불일치: ${result.error.message.slice(0, 200)}`)
   return result.data

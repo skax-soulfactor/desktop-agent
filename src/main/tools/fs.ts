@@ -31,7 +31,13 @@ export const fsRead: DesktopToolDef<z.ZodObject<{ path: z.ZodString }>> = {
 
 export const fsWrite: DesktopToolDef<z.ZodObject<{ path: z.ZodString; content: z.ZodString }>> = {
   name: 'fs_write',
-  description: '텍스트 파일을 생성하거나 덮어쓴다. 필요한 상위 디렉토리는 자동 생성된다.',
+  // 설정 파일 작성 지침이 도구 설명에 붙어 있는 이유: 같은 내용을 시스템 프롬프트에 넣었을 때
+  // 로컬 9B는 따르지 않았다(3회 실측). 작은 모델은 호출 직전에 도구 설명을 읽으므로 여기가 더 잘 걸린다.
+  description:
+    '텍스트 파일을 생성하거나 덮어쓴다. 필요한 상위 디렉토리는 자동 생성된다. ' +
+    '설정 파일이라면 먼저 그 제품이 설치 폴더에 갖고 있는 템플릿·샘플(templates/, samples/, *.sample, *.example)을 ' +
+    'fs_read로 읽고 그것을 고쳐 써라. 전용 생성 명령(bin 아래 create·init 등)이 있으면 그쪽을 먼저 쓴다. ' +
+    '엘리먼트·속성 이름과 파일이 놓일 경로를 기억으로 지어내지 마라 — 제품과 버전마다 다르다.',
   risk: 'write',
   inputSchema: z.object({ path: z.string(), content: z.string() }),
   describeCall: (i) => `파일 쓰기: ${i.path} (${i.content.length}자)`,
