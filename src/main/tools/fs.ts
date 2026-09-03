@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'fs'
+import { decodeText } from './encoding'
 import { homedir } from 'os'
 import { dirname, join, resolve } from 'path'
 import type { DesktopToolDef } from './defs'
@@ -21,11 +22,13 @@ export const fsRead: DesktopToolDef<z.ZodObject<{ path: z.ZodString }>> = {
   async execute(i) {
     const p = expandHome(i.path)
     const stat = statSync(p)
+    // UTF-8이 아닌 파일도 있다. 제품 로그가 대표적으로, 그냥 UTF-8로 읽으면 한글이 통째로
+    // 깨져 모델에 들어가고 모델은 그 상태로 근거를 삼는다 — 실제로 Liberty 로그가 그랬다.
+    const content = decodeText(readFileSync(p))
     if (stat.size > MAX_READ) {
-      const content = readFileSync(p, 'utf-8').slice(0, MAX_READ)
-      return { path: p, truncated: true, content }
+      return { path: p, truncated: true, content: content.slice(0, MAX_READ) }
     }
-    return { path: p, truncated: false, content: readFileSync(p, 'utf-8') }
+    return { path: p, truncated: false, content }
   }
 }
 
