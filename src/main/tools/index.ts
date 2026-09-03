@@ -24,6 +24,41 @@ export function toolDefByName(name: string): DesktopToolDef | undefined {
   return allToolDefs.find((d) => d.name === name)
 }
 
+/**
+ * 앱 바깥의 사실을 실제로 관찰하는 도구인가 — 기억 추출의 "이번 턴에 확인한 것이 있는가" 판정 기준.
+ *
+ * 도구를 부르기만 하면 확인된 턴으로 치면, 방금 제가 만든 파일이나 제가 저장한 기억이 근거가 된다.
+ * 실제로 그랬다: 에이전트가 OpenLiberty의 server.xml을 통째로 지어내 쓴 뒤 그 경로를 `출처:`로 달았고,
+ * 도구가 done이라는 이유만으로 그 턴 전체가 확인된 턴으로 기록됐다.
+ *
+ * 바깥을 읽는 것(파일 읽기·목록, 셸, HTTP, MCP·검색)만 관찰로 친다.
+ * 파일을 쓰는 도구와 앱 내부 상태를 다루는 제어 도구는 아니다. 피어의 답변도 아니다 —
+ * 그쪽이 무엇을 근거로 답했는지 이쪽에서는 알 수 없다.
+ */
+const APP_CONTROL_TOOLS = new Set([
+  'delegate_task',
+  'cancel_task',
+  'list_tasks',
+  'save_memory',
+  'schedule_task',
+  'list_schedules',
+  'cancel_schedule',
+  'list_peers',
+  'ask_peer',
+  'delegate_to_peer',
+  'list_secrets',
+  'request_secret',
+  'list_mcp_servers',
+  'add_mcp_server'
+])
+
+export function observesWorld(toolName: string): boolean {
+  const def = toolDefByName(toolName)
+  // 이름을 모르는 것은 MCP 도구(mcp_<서버>_<도구>)와 web_search다 — 그쪽은 바깥을 읽는다
+  if (!def) return !APP_CONTROL_TOOLS.has(toolName)
+  return def.risk !== 'write'
+}
+
 export interface TurnContext {
   sessionId: string
   win: BrowserWindow

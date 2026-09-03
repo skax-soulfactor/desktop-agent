@@ -8,7 +8,13 @@ import { buildSkillContext } from '../skills/store'
 import { resolveModelFor, type ResolvedModel } from '../llm/providers'
 import { estimateTokens, fitToTokens, type ModelProfile } from '../llm/profile'
 import { describeError } from '../llm/errors'
-import { buildTools, toolDefByName, PURPOSE_DESCRIPTION, type TurnContext } from '../tools'
+import {
+  buildTools,
+  toolDefByName,
+  observesWorld,
+  PURPOSE_DESCRIPTION,
+  type TurnContext
+} from '../tools'
 import { isElevationEnabled } from '../permissions/elevation'
 import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
@@ -31,9 +37,15 @@ import { searchPresetHint } from '@shared/searchPresets'
  * 위임하면 대화가 끊기고, 그 비용 때문에 모델은 결국 확인을 건너뛰고 학습 시점의 낡은 값으로 답한다.
  * 다만 로컬 모델에는 주지 않는다 — 이 도구 정의 하나가 239토큰이라 창이 4096이면 그만큼 대화가
  * 밀려나고, 받아 온 JSON 본문도 어차피 그 창에 들어가지 않는다. 그쪽은 delegate_task로 워커가 한다.
+ *
+ * fs_write도 여기 있다. 설정 파일 한두 개를 쓰는 것은 오래 걸리는 일이 아니라 즉시 끝나는 일이고,
+ * 위임 규칙으로 막아 봐야 shell_exec가 그대로 열려 있어 실효가 없다. 실제로 막힌 모델은 echo
+ * 리다이렉션과 PowerShell here-string으로 XML을 밀어 넣으려다 <와 따옴표에서 세 번 연속 실패하고
+ * 네 번째에야 Set-Content로 성공했다 — 그 세 번은 사용자의 컨텍스트를 태운 값이다.
+ * 깨끗한 길을 주는 편이 낫다. 부수효과 자체는 승인 게이트가 그대로 막는다.
  */
 function mainAgentTools(profile: ModelProfile): string[] {
-  const base = ['fs_read', 'fs_list', 'shell_exec', 'shell_exec_elevated']
+  const base = ['fs_read', 'fs_write', 'fs_list', 'shell_exec', 'shell_exec_elevated']
   return profile.local ? base : [...base, 'http_request']
 }
 
@@ -87,8 +99,9 @@ function compactSystemPrompt(): string[] {
     '  그 전체를 대상으로 하는 작업(번역·요약·분석·추출)은 미리보기로 답하지 말고 process_document를 호출하라.',
     '  분할·처리·병합은 앱이 알아서 한다. 네가 조각을 나누거나 "앞부분만 했다"고 답할 필요 없다.',
     '- 확인한 사실과 추정을 구분하라. 검증하지 않은 것을 단정하지 마라.',
-    '- 출처는 이번 턴에 네가 실제로 호출한 도구에서만 나온다. 도구를 호출했으면 답변 끝에 `출처:` 한 줄로 그 파일 경로·명령·URL을 적어라.',
-    '- 도구를 하나도 호출하지 않았으면 `출처:` 줄 자체를 쓰지 마라. 대신 답변 첫 줄에 "확인 안 함 — 학습 시점 기준이라 지금은 다를 수 있다"라고 적어라.',
+    '- 출처는 이번 턴에 네가 읽은 것에서만 나온다. 읽거나 조회하는 도구(fs_read·fs_list·shell_exec·http_request·web_search)를 호출했으면',
+    '  답변 끝에 `출처:` 한 줄로 그 파일 경로·명령·URL을 적어라.',
+    '- 읽은 것이 하나도 없으면 `출처:` 줄 자체를 쓰지 마라. 대신 답변 첫 줄에 "확인 안 함 — 학습 시점 기준이라 지금은 다를 수 있다"라고 적어라.',
     '- 웹사이트·공식 문서·릴리스 노트를 출처로 적는 것은 이번 턴에 그 URL을 실제로 연 경우에만 허용된다. 열지 않았으면 이름조차 적지 마라.',
     '- 네 학습 지식은 과거에 멈춰 있다. 버전·릴리스·가격·API 스펙처럼 변하는 값은 기억으로 답하지 마라.',
     '  로컬에서 확인되는 것은 shell_exec로 직접 봐라.',
@@ -99,7 +112,8 @@ function compactSystemPrompt(): string[] {
     '  예: 메모리 상위 20개는 tasklist 전체를 받지 말고 `Get-Process | Sort-Object WS -Descending | Select-Object -First 20 Name,WS`.',
     '  전부 받아 process_document로 나누는 것은 명령으로 줄일 수 없을 때만 쓴다 — 조각은 서로를 못 보므로',
     '  "상위 N개" 같은 전체 기준 작업은 나누면 조각마다 기준이 달라져 답이 틀린다.',
-    '- 파일 수정·설치·빌드처럼 부수효과가 있거나 오래 걸리는 일은 delegate_task로 위임하고,',
+    '- 파일을 만들거나 고칠 때는 fs_write를 써라. echo·here-string으로 셸에서 쓰면 <와 따옴표에서 깨진다.',
+    '- 설치·빌드처럼 오래 걸리는 일은 delegate_task로 위임하고,',
     '  무엇을 왜 시작했는지 한 줄로 알린 뒤 턴을 끝내라. 완료를 기다리지 마라.',
     '- 도구 호출의 purpose에는 "왜 지금 필요한지"를 사용자의 언어로 한 문장 써라. 비워두지 마라.',
     '- 위에 정의된 도구만 호출하라. 없는 이름(systeminfo 등)을 지어내지 마라. 셸 명령은 shell_exec의 command 인자로 넣는다.',
@@ -158,7 +172,8 @@ function fullSystemPrompt(): string[] {
     '## 출처 표시 규칙',
     '- 사실을 담은 답변에는 그것을 어디서 얻었는지 함께 밝혀라. 사용자는 네가 확인한 것과 그냥 아는 것을 구분할 수 있어야 한다.',
     '- 근거가 하나뿐이면 답변 끝에 `출처:` 한 줄로 모으고, 문단마다 근거가 다르면 해당 문장 옆에 괄호로 달아라.',
-    '- 출처가 될 수 있는 것은 이번 대화에서 네가 실제로 호출한 도구의 결과뿐이다. 도구를 하나도 호출하지 않았으면 `출처:` 줄을 쓰지 말고 "확인 안 함"이라고 밝혀라.',
+    '- 출처가 될 수 있는 것은 이번 대화에서 네가 읽은 도구 결과뿐이다 — 파일 읽기·목록, 셸 조회, HTTP, 검색·MCP.',
+    '  파일을 쓰는 도구(fs_write)는 출처를 만들지 않는다. 아무것도 읽지 않았으면 `출처:` 줄을 쓰지 말고 "확인 안 함"이라고 밝혀라.',
     '  웹사이트·공식 문서·릴리스 노트의 이름을 출처로 적는 것은 그 URL을 이번에 실제로 연 경우에만 허용된다 — 열지 않고 적으면 사용자는 확인된 답으로 오해한다.',
     '- 출처 표기: 파일 읽기·목록은 경로, 셸 실행은 실제 실행한 명령, HTTP는 요청한 URL, 첨부는 파일 이름(가능하면 절·페이지까지),',
     '  지식베이스는 기억 제목, 백그라운드 작업 결과는 작업 제목, 피어는 에이전트 이름, MCP 도구는 도구 이름과 대상 서비스.',
@@ -166,6 +181,8 @@ function fullSystemPrompt(): string[] {
     '- 도구로 확인하지 않고 네 일반 지식으로 답한 부분은 "일반 지식(확인 안 함)"이라고 명시하라. 출처가 없다는 사실 자체가 알려야 할 출처다.',
     '- 확인한 사실과 일반 지식이 한 답변에 섞이면 어느 쪽인지 문장 단위로 갈라 써라. 뭉뚱그려 한 덩어리로 내지 마라.',
     '- 출처를 지어내지 마라. 읽지 않은 경로, 실행하지 않은 명령, 없는 기억 제목을 출처로 적는 것은 답이 틀리는 것보다 나쁘다 — 사용자가 검증할 길까지 막는다.',
+    '- 네가 이번 턴에 만들거나 고친 파일은 출처가 아니다. 그 내용은 네가 쓴 것이라 아무것도 확인해 주지 않는다 — 네 주장을 네가 인용하는 것뿐이다.',
+    '  설정 파일을 새로 쓰고 그 경로를 출처로 다는 것이 대표적인 오용이다. 근거로 삼을 것은 쓰기 전에 읽은 원본·템플릿·문서다.',
     '- 도구 결과가 미리보기(documentId)뿐이면 그 사실도 함께 밝혀라. 전문을 다 보고 말한 것처럼 쓰지 마라.',
     '- 인사·확인·되묻기처럼 사실 주장이 없는 짧은 응답에는 출처를 붙이지 마라.',
     '',
@@ -189,10 +206,21 @@ function fullSystemPrompt(): string[] {
     '- 원인이 확인되기 전에 사용자 파일·설정을 고치지 마라. 추측으로 고치면 원인은 그대로 남고 되돌릴 변경만 쌓인다. 수정할 때는 무엇을 왜 바꾸는지 먼저 말하라.',
     '- 조사는 누적되어야 한다. 새 가설을 세울 때마다 처음부터 다시 훑지 말고, 앞선 결과 중 무엇이 확정됐고 무엇이 뒤집혔는지 짚고 이어가라.',
     '',
+    '## 설정 파일 작성 규칙',
+    '- 설정 파일을 새로 쓰기 전에 근거를 먼저 확보하라. 스키마를 기억으로 지어내면 겉보기에 그럴듯하고 실제로는 뜨지 않는 파일이 나온다.',
+    '- ① 그 프로그램에 전용 생성·초기화 명령이 있는지 먼저 보라(bin·sbin 아래의 create·init·new 서브커맨드, 설치 문서의 첫 단계).',
+    '  있으면 손으로 쓰지 말고 그 명령을 실행하라. 그래야 경로·권한·부속 파일까지 제품이 정한 대로 만들어진다.',
+    '- ② 설치 디렉토리에 템플릿·샘플·기본 설정이 있는지 찾아 읽어라(templates/, samples/, conf/, etc/, *.sample, *.default, *.example).',
+    '  fs_list로 훑고 fs_read로 읽은 뒤 그것을 고쳐 써라. 찾던 이름의 파일이 없다고 바로 포기하지 마라 — 목록에서 눈에 띈 디렉토리는 한 번 열어 보라.',
+    '- 둘 다 확보하지 못했으면 지어내지 말고, 무엇을 근거로 쓰려는지와 확인이 필요하다는 것을 먼저 사용자에게 알려라.',
+    '- 엘리먼트·속성 이름, 네임스페이스, 파일이 놓일 경로는 제품과 버전마다 다르다. 이것들은 특히 기억으로 채우지 마라.',
+    '',
     '## 작업 위임 규칙',
     '- 즉시 끝나는 조회(파일 읽기, 디렉토리·타임스탬프 확인, 상태 조회 명령 등)는 직접 하고 그 자리에서 답하라. 이런 걸 위임하면 대화만 끊긴다.',
-    '- 파일 생성·수정, 설치·빌드·배포처럼 부수효과가 있거나 오래 걸리는 작업, 여러 단계가 필요한 작업은 delegate_task로 백그라운드 서브 에이전트에 위임하라.',
-    '- 직접 실행하는 shell_exec는 읽기 전용 확인에만 써라. 파일을 바꾸거나 시스템 상태를 바꾸는 명령은 위임하라.',
+    '- 파일 한두 개를 만들거나 고치는 일은 fs_write로 직접 하고 그 자리에서 답하라. 즉시 끝나는 일이라 위임하면 대화만 끊긴다.',
+    '- 설치·빌드·배포처럼 오래 걸리는 작업, 여러 파일을 훑어 고치는 작업, 여러 단계가 필요한 작업은 delegate_task로 백그라운드 서브 에이전트에 위임하라.',
+    '- 파일 내용을 셸로 쓰지 마라. echo 리다이렉션과 here-string은 <, >, 따옴표, 줄바꿈에서 깨진다. 파일을 쓸 때는 fs_write를 써라.',
+    '- 직접 실행하는 shell_exec는 읽기 전용 확인에 써라. 시스템 상태를 바꾸는 명령(설치·서비스 조작 등)은 위임하라.',
     '- 출력이 클 것 같은 조회는 명령 자체에서 정렬·필터·개수 제한을 걸어라(예: `Get-Process | Sort-Object WS -Descending | Select-Object -First 20`). ' +
       '전부 받아 process_document로 나누는 것은 명령으로 줄일 수 없을 때만 쓴다 — 조각은 서로를 볼 수 없어 "상위 N개"처럼 전체를 기준으로 하는 작업은 나누면 답이 틀린다.',
     elevationRule(),
@@ -393,6 +421,53 @@ function summarizeCall(toolName: string, input: unknown): string {
   if (toolName === 'list_mcp_servers') return 'MCP 서버 목록 조회'
   if (toolName === 'add_mcp_server') return `MCP 서버 등록: ${String(i.name ?? '')}`
   return toolName
+}
+
+/**
+ * 경로 비교용 키. 구분자(/ 역슬래시 : 따옴표·백틱)와 대소문자 차이를 지워, 답변에 적힌 경로와
+ * 도구가 돌려준 경로를 같은 형태로 놓고 견준다. 경로에 쓰이지 않는 문자는 모두 구분자로 본다.
+ */
+function pathKey(s: string): string {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9._+-]+/)
+    .filter(Boolean)
+    .join('/')
+}
+
+/**
+ * 이번 턴에 fs_write로 쓴 파일을 답변이 `출처:`로 인용했는가.
+ *
+ * 프롬프트로 세 번 막아 봤지만 로컬 9B는 계속 자기가 쓴 파일을 출처로 달았다. 규칙이 잘려서가
+ * 아니다 — 창(8192)에 다 들어가는 것을 확인했는데도 따르지 않았다. 모델의 협조를 전제하지 않는
+ * 자리는 결과 쪽뿐이라 여기서 본다.
+ *
+ * 답을 고쳐 쓰지는 않는다. 모델이 한 말은 그대로 두고, 그것이 근거가 아니라는 사실만 덧붙인다.
+ */
+function citedOwnWrites(items: ChatItem[]): string[] {
+  const written = new Map<string, string>()
+  for (const it of items) {
+    if (it.kind !== 'tool' || it.toolName !== 'fs_write') continue
+    if (it.status !== 'done' || !it.output) continue
+    try {
+      const path = (JSON.parse(it.output) as { path?: unknown }).path
+      if (typeof path === 'string') written.set(pathKey(path), path)
+    } catch {
+      // 결과가 JSON이 아니면(예산에 걸려 요약된 경우 등) 경로를 알 수 없다 — 넘어간다
+    }
+  }
+  if (written.size === 0) return []
+
+  const cited = new Set<string>()
+  for (const it of items) {
+    if (it.kind !== 'assistant' || !it.text) continue
+    for (const line of it.text.split('\n')) {
+      if (!line.includes('출처')) continue
+      const key = pathKey(line)
+      for (const [k, original] of written) if (key.includes(k)) cited.add(original)
+    }
+  }
+  return [...cited]
 }
 
 export async function runTurn(
@@ -597,9 +672,22 @@ export async function runTurn(
     addSessionUsage(sessionId, usage.input, usage.output)
     send({ type: 'turn-end', unresolvedToolCallIds: unresolvedIds, usage })
 
-    // 이번 턴에 실제로 결과를 돌려준 도구가 있었는가. 없었다면 에이전트가 한 말은 전부
+    // 자기가 쓴 파일을 출처로 단 경우 — 모델이 규칙을 따르지 않으므로 결과를 보고 사용자에게 알린다
+    const selfCited = citedOwnWrites(newItems)
+    if (selfCited.length > 0) {
+      const text =
+        `출처로 적힌 ${selfCited.join(', ')}는 이번 턴에 에이전트가 직접 쓴 파일입니다. ` +
+        '확인된 근거가 아니라 방금 작성한 내용이므로, 값이 맞는지는 따로 확인하세요.'
+      appendToSession(sessionId, [{ kind: 'notice', text }], [])
+      send({ type: 'notice', text })
+    }
+
+    // 이번 턴에 바깥을 실제로 관찰한 도구가 있었는가. 없었다면 에이전트가 한 말은 전부
     // 자기 기억에서 나온 것이고, 그것이 지식베이스로 넘어가면 다음 턴에서 근거처럼 되살아난다.
-    const verified = newItems.some((it) => it.kind === 'tool' && it.status === 'done')
+    // 파일을 쓰거나 앱 내부를 조작한 것은 관찰이 아니다 — 제가 쓴 것을 제가 확인했다고 칠 수 없다.
+    const verified = newItems.some(
+      (it) => it.kind === 'tool' && it.status === 'done' && observesWorld(it.toolName)
+    )
 
     // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다. 실패는 삼키지 않고 화면에 알린다
     void extractMemories(
