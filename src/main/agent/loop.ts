@@ -126,12 +126,11 @@ function compactSystemPrompt(): string[] {
     '  전부 받아 process_document로 나누는 것은 명령으로 줄일 수 없을 때만 쓴다 — 조각은 서로를 못 보므로',
     '  "상위 N개" 같은 전체 기준 작업은 나누면 조각마다 기준이 달라져 답이 틀린다.',
     '- 파일을 만들거나 고칠 때는 fs_write를 써라. echo·here-string으로 셸에서 쓰면 <와 따옴표에서 깨진다.',
-    '- 설치·빌드처럼 오래 걸리는 일은 delegate_task로 위임하고,',
-    '  무엇을 왜 시작했는지 한 줄로 알린 뒤 턴을 끝내라. 완료를 기다리지 마라.',
+    '- 설치·빌드·배포처럼 오래 걸리거나 사용자 확인이 필요한 일은 네가 실행하지 말고,',
+    '  무엇을 어떤 순서로 하면 되는지 명령까지 적어 사용자에게 넘겨라.',
     '- 도구 호출의 purpose에는 "왜 지금 필요한지"를 사용자의 언어로 한 문장 써라. 비워두지 마라.',
     '- 위에 정의된 도구만 호출하라. 없는 이름(systeminfo 등)을 지어내지 마라. 셸 명령은 shell_exec의 command 인자로 넣는다.',
     elevationRule(),
-    '- 앞으로 계속 쓰일 정보(선호, 규칙, 저장 위치)는 save_memory로 저장하라.',
     '- "[작업 알림"으로 시작하는 메시지는 시스템이 보낸 작업 상태 알림이다. 사용자 발언으로 취급하지 마라.'
   ]
 }
@@ -502,11 +501,15 @@ const REPEAT_LIMIT = 2
  * 본문은 같은 문단을 그대로 다시 썼다. 세는 대상이 어긋나 있었다.
  *
  * 앞부분만 견주는 이유: 반복된 문단은 대개 뒤가 잘린 채 끝나서(길이 제한) 전문이 일치하지
- * 않는다. 짧은 진행 안내("로그를 확인하겠습니다")는 되풀이돼도 정상이므로 길이로 걸러낸다.
+ * 않는다. 아주 짧은 진행 안내는 되풀이돼도 정상일 수 있으므로 길이로 걸러낸다.
+ *
+ * 최소 길이 30자의 근거: 세션 전체(사용자 턴 71개)로 임계값을 훑었다. 60자와 40자는 "로그
+ * 분석을 진행하겠습니다. 문서 전체를 읽어보겠습니다."(31자)를 세 번 되풀이한 턴을 놓쳤고,
+ * 25자 아래로 내리면 멀쩡한 턴이 하나 더 걸렸다. 30자가 그 사이다.
  */
 function textKey(text: string): string | null {
   const norm = text.replace(/\s+/g, ' ').trim()
-  return norm.length < 60 ? null : norm.slice(0, 120)
+  return norm.length < 30 ? null : norm.slice(0, 120)
 }
 
 /**
@@ -609,17 +612,41 @@ export async function runTurn(
     const { model, config, profile } = resolved
     ctx.resultChars = profile.toolResultChars
 
+    /*
+     * 좁은 창(로컬 모델)에서는 실제로 쓰이는 도구만 남긴다.
+     *
+     * 실측한 이유가 있다. 세션 30개·사용자 턴 71개를 전수 조사했더니 호출된 도구는
+     * shell_exec 39회, fs_read 18회, fs_list 10회, process_document 4회, fs_write 3회,
+     * web_search 2회뿐이었다. 위임·스케줄·기억 저장·피어·시크릿·MCP 관리 도구는 한 번도
+     * 불리지 않았는데 정의만으로 약 3,350토큰(창 8,192의 41%)을 먹고 있었다.
+     * 시스템 프롬프트까지 더하면 고정 비용이 창의 3/4을 차지해, 대화가 들어갈 자리가
+     * 2,000토큰밖에 남지 않았다 — 답변이 문장 중간에서 끊기고 같은 문단을 되풀이하던
+     * 원인이 여기에 있다.
+     *
+     * http_request를 로컬에서 빼는 것과 같은 판단이다(mainAgentTools 참고). 큰 창을 가진
+     * 모델에는 그대로 다 준다. 문서 처리(process_document)와 검색(web_search)은 남긴다 —
+     * 앞의 것은 창보다 큰 입력을 다루는 유일한 길이고, 뒤의 것이 없으면 최신 정보를
+     * 확인할 수단이 아예 사라진다.
+     */
     const tools = {
       ...buildTools(ctx, mainAgentTools(profile)),
       ...(await searchTools(ctx)),
-      ...taskTools(win, sessionId),
-      ...scheduleTools(sessionId),
-      ...memoryTools(win, sessionId),
-      ...peerTools(),
-      ...integrationTools(win, sessionId),
-      ...documentTools(win, sessionId, (documentId, instruction, mode, plan) =>
-        startDocumentTask(win, sessionId, documentId, instruction, mode, plan)
-      )
+      ...documentTools(
+        win,
+        sessionId,
+        (documentId, instruction, mode, plan) =>
+          startDocumentTask(win, sessionId, documentId, instruction, mode, plan),
+        (taskId) => listTasks(sessionId).find((t) => t.id === taskId)?.status
+      ),
+      ...(profile.local
+        ? {}
+        : {
+            ...taskTools(win, sessionId),
+            ...scheduleTools(sessionId),
+            ...memoryTools(win, sessionId),
+            ...peerTools(),
+            ...integrationTools(win, sessionId)
+          })
     }
     const toolTokens = estimateToolTokens(tools)
     // 지난 턴들이 알려 준 실제/추정 비율만큼 예산을 미리 줄여 둔다
@@ -671,8 +698,22 @@ export async function runTurn(
     // 이번 턴에 나온 본문 문단들. 같은 문단이 다시 나오면 제자리를 돌고 있는 것이다
     const seenTexts = new Set<string>()
     let repeatedTexts = 0
-    /** 지금까지 쌓인 '제자리 돌기' 신호 — 도구 재조회 차단과 문단 반복을 함께 센다 */
-    const spinning = (): number => (ctx.repeatedCalls ?? 0) + repeatedTexts
+    /**
+     * 사용자가 거절한 도구. 거절당한 도구를 다시 부르는 것은 가장 분명한 제자리 돌기다 —
+     * 결과에 "다시 시도하지 말라"고 적어 보내는데도 모델이 네 번을 되풀이한 턴이 있었다.
+     */
+    const declinedTools = new Set<string>()
+    let refusalSignals = 0
+    /**
+     * 이번 턴에 백그라운드 작업을 띄웠는가.
+     *
+     * 띄운 작업의 결과는 이 턴에 도착하지 않는다. 그런데도 모델이 "분석이 완료되었습니다"라며
+     * 답을 쓴 적이 있고, 그 내용이 확인된 교훈으로 지식베이스에 들어갔다. 작업을 띄우고 그
+     * 결과 없이 끝난 턴은 무엇을 관찰했든 그 답의 근거가 아니므로 확인된 턴으로 치지 않는다.
+     */
+    let spawnedTask = false
+    /** 지금까지 쌓인 '제자리 돌기' 신호 — 재조회 차단, 문단 반복, 거절 무시를 함께 센다 */
+    const spinning = (): number => (ctx.repeatedCalls ?? 0) + repeatedTexts + refusalSignals
     /** 본문 한 덩이가 끝나는 자리에서 호출한다 (도구 호출 직전, 그리고 턴 끝) */
     const noteTextBlock = (): void => {
       const key = textBlock ? textKey(textBlock.text) : null
@@ -700,6 +741,8 @@ export async function runTurn(
           summary,
           status: 'running'
         }
+        // 사용자가 이미 거절한 도구를 다시 부르는 중이다. 한 번의 재시도까지만 지나가게 한다.
+        if (declinedTools.has(part.toolName)) refusalSignals += REPEAT_LIMIT
         toolItems.set(part.toolCallId, item)
         newItems.push(item)
         noteTextBlock()
@@ -708,15 +751,23 @@ export async function runTurn(
       } else if (part.type === 'tool-result') {
         const output = JSON.stringify(part.output)
         const item = toolItems.get(part.toolCallId)
-        const status: 'done' | 'denied' | 'error' = output.includes('"denied":true')
-          ? 'denied'
-          : output.includes('"error":')
-            ? 'error'
-            : 'done'
+        // declined는 문서 처리 확인 흐름이, denied는 권한 게이트가 쓰는 표시다. 둘 다 거절이다 —
+        // declined를 빼먹어 사용자가 취소한 작업이 카드에서 '완료'로 보이고 있었다.
+        const status: 'done' | 'denied' | 'error' =
+          output.includes('"denied":true') || output.includes('"declined":true')
+            ? 'denied'
+            : output.includes('"error":')
+              ? 'error'
+              : 'done'
         if (item) {
           item.status = status
           item.output = output.slice(0, 2000)
         }
+        if (status === 'denied') {
+          declinedTools.add(item?.toolName ?? part.toolName)
+          refusalSignals++
+        }
+        if (output.includes('"taskId":') && output.includes('"running"')) spawnedTask = true
         send({ type: 'tool-result', toolCallId: part.toolCallId, status, output: output.slice(0, 2000) })
       } else if (part.type === 'tool-error') {
         // 없는 도구 이름이나 스키마에 맞지 않는 인자 — 로컬 모델에서 흔하다.
@@ -792,9 +843,11 @@ export async function runTurn(
 
     // 깔끔하게 끝나지 않은 턴 — 조용히 두면 사용자는 앱이 답을 하다 만 것으로만 본다
     const incomplete =
-      spinning() >= REPEAT_LIMIT
-        ? '같은 내용을 되풀이하기만 해서 중간에 멈췄습니다. 무엇을 확인해야 하는지 좁혀서 다시 물어봐 주세요.'
-        : describeFinish(finishReason, profile.maxSteps)
+      refusalSignals >= REPEAT_LIMIT
+        ? '취소하신 작업을 다시 시도해서 멈췄습니다. 무엇을 원하시는지 알려 주세요.'
+        : spinning() >= REPEAT_LIMIT
+          ? '같은 내용을 되풀이하기만 해서 중간에 멈췄습니다. 무엇을 확인해야 하는지 좁혀서 다시 물어봐 주세요.'
+          : describeFinish(finishReason, profile.maxSteps)
     if (incomplete) {
       appendToSession(sessionId, [{ kind: 'notice', text: incomplete }], [])
       send({ type: 'notice', text: incomplete })
@@ -813,9 +866,11 @@ export async function runTurn(
     // 이번 턴에 바깥을 실제로 관찰한 도구가 있었는가. 없었다면 에이전트가 한 말은 전부
     // 자기 기억에서 나온 것이고, 그것이 지식베이스로 넘어가면 다음 턴에서 근거처럼 되살아난다.
     // 파일을 쓰거나 앱 내부를 조작한 것은 관찰이 아니다 — 제가 쓴 것을 제가 확인했다고 칠 수 없다.
-    const verified = newItems.some(
-      (it) => it.kind === 'tool' && it.status === 'done' && observesWorld(it.toolName)
-    )
+    const verified =
+      !spawnedTask &&
+      newItems.some(
+        (it) => it.kind === 'tool' && it.status === 'done' && observesWorld(it.toolName)
+      )
 
     // 백그라운드 기억 추출 — 사용자 응답을 막지 않는다. 실패는 삼키지 않고 화면에 알린다
     void extractMemories(
