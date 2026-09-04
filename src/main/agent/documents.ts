@@ -1,7 +1,7 @@
 import { tool, type ToolSet } from 'ai'
 import { z } from 'zod'
 import type { BrowserWindow } from 'electron'
-import type { TaskInfo } from '@shared/types'
+import type { TaskInfo, TaskStatus } from '@shared/types'
 import { completeText } from '../llm/complete'
 import { estimateTokens, type ModelProfile } from '../llm/profile'
 import { resolveModelFor } from '../llm/providers'
@@ -84,11 +84,24 @@ export function splitIntoChunks(text: string, chunkTokens: number): string[] {
 /**
  * 조각 하나에 허용할 입력 토큰.
  *
- * 프롬프트 예산뿐 아니라 출력 상한도 함께 본다 — 번역·재작성은 결과가 입력만큼 길어지므로,
+ * 변환(transform)은 출력 상한도 함께 본다 — 번역·재작성은 결과가 입력만큼 길어지므로,
  * 입력을 출력 상한보다 크게 잡으면 조각마다 결과가 잘린다.
+ *
+ * 요약·분석(reduce)에는 그 제한이 필요 없다. 결과가 입력보다 훨씬 짧으므로 출력 상한에
+ * 맞춰 조각을 잘게 썰 이유가 없다. 실제로 18,600토큰짜리 로그가 "분석해서 문제점 알려줘"에서
+ * 13조각으로 쪼개졌는데, 프롬프트 예산 기준이면 5조각으로 끝난다. 조각이 적을수록 모델 호출과
+ * 병합 단계가 줄고, 스택 트레이스가 조각 경계에서 갈릴 자리도 줄어든다.
+ *
+ * 프롬프트 기준에 0.8을 곱하는 이유: estimateTokens는 실제보다 20%가량 낮게 나온다(챗 경로는
+ * promptScale로 실측 보정한다). 예산을 그대로 믿고 채우면 창을 넘겨 조각 결과가 잘린다.
  */
-function chunkBudget(profile: ModelProfile, overheadTokens: number): number {
-  const byPrompt = profile.promptBudget - overheadTokens
+function chunkBudget(
+  profile: ModelProfile,
+  overheadTokens: number,
+  mode: 'transform' | 'reduce'
+): number {
+  const byPrompt = Math.floor((profile.promptBudget - overheadTokens) * 0.8)
+  if (mode === 'reduce') return Math.max(256, byPrompt)
   const byOutput = Math.floor((profile.maxOutputTokens ?? 4096) * 0.7)
   return Math.max(256, Math.min(byPrompt, byOutput))
 }
@@ -155,7 +168,7 @@ function recordDuration(chunks: number, seconds: number): void {
 export async function planDocumentJob(doc: StoredDocument, instruction: string): Promise<DocumentPlan> {
   const { profile } = await resolveModelFor('standard')
   const overhead = estimateTokens(TRANSFORM_PROMPT + instruction) + 200
-  const chunkTokens = chunkBudget(profile, overhead)
+  const chunkTokens = chunkBudget(profile, overhead, inferMode(instruction))
   const chunks = splitIntoChunks(doc.text, chunkTokens)
   const stats = readStats()
   return {
@@ -274,14 +287,14 @@ export async function runDocumentJob(
   const startedAt = Date.now()
   const { model, config, profile } = await resolveModelFor('standard')
   const overhead = estimateTokens(TRANSFORM_PROMPT + instruction) + 200
-  const chunks = plan?.chunks ?? splitIntoChunks(doc.text, chunkBudget(profile, overhead))
+  const chunks = plan?.chunks ?? splitIntoChunks(doc.text, chunkBudget(profile, overhead, mode))
 
   // 첫 조각이 끝나기 전에도 무엇을 하는지 보이도록, 분할 계획을 로그 첫 줄로 남긴다
   hooks.onStepStart('split', `"${doc.name}" 분할 — ${chunks.length}조각`)
   hooks.onStepEnd(
     'split',
     'done',
-    `문서 ${doc.tokens.toLocaleString()}토큰을 조각당 최대 ${chunkBudget(profile, overhead).toLocaleString()}토큰으로 나눴습니다.\n` +
+    `문서 ${doc.tokens.toLocaleString()}토큰을 조각당 최대 ${chunkBudget(profile, overhead, mode).toLocaleString()}토큰으로 나눴습니다.\n` +
       `조각별 토큰: ${chunks.map((c) => estimateTokens(c)).join(', ')}\n` +
       `방식: ${mode === 'reduce' ? '조각별 처리 후 병합' : '조각별 처리 후 이어 붙임'}`
   )
@@ -359,7 +372,7 @@ export async function runDocumentJob(
   let pending = parts
   let round = 0
   while (pending.length > 1) {
-    const groups = splitIntoChunks(pending.join('\n\n---\n\n'), chunkBudget(profile, overhead))
+    const groups = splitIntoChunks(pending.join('\n\n---\n\n'), chunkBudget(profile, overhead, 'reduce'))
     const next: string[] = []
     round++
     for (let g = 0; g < groups.length; g++) {
@@ -405,6 +418,15 @@ const CANCEL = '취소'
 /** "다시 묻지 않기"를 고른 대화 — 승인 게이트의 세션 허용과 같은 범위다 */
 const skipConfirm = new Set<string>()
 
+/**
+ * 문서별로 지금 돌고 있는 작업 (documentId → taskId).
+ *
+ * 같은 문서에 같은 작업을 두 번 띄운 턴이 있었다. 조각 4개짜리 일이 8개분 돌았고, 앱은 그것을
+ * "반복해서 쓰는 작업"으로 보고 스킬로 저장까지 했다 — 그 스킬의 지시문에는 모델이 앞선
+ * 세션에서 지어낸 가설이 그대로 박혔다. 중복 실행 자체를 막는다.
+ */
+const runningJobs = new Map<string, string>()
+
 export function documentTools(
   win: BrowserWindow,
   sessionId: string,
@@ -413,7 +435,9 @@ export function documentTools(
     instruction: string,
     mode: 'transform' | 'reduce',
     plan: DocumentPlan
-  ) => TaskInfo
+  ) => TaskInfo,
+  /** 작업이 아직 돌고 있는지 확인한다 (tasks 모듈을 여기서 import하면 순환이 된다) */
+  taskStatus?: (taskId: string) => TaskStatus | undefined
 ): ToolSet {
   return {
     process_document: tool({
@@ -446,6 +470,21 @@ export function documentTools(
         if (!doc) return { error: `documentId ${documentId}에 해당하는 문서가 없습니다.` }
         if (doc.sessionId !== sessionId) return { error: '다른 대화의 문서입니다.' }
 
+        // 같은 문서 작업이 이미 돌고 있으면 또 띄우지 않는다
+        const prior = runningJobs.get(documentId)
+        if (prior) {
+          if (taskStatus?.(prior) === 'running') {
+            return {
+              alreadyRunning: true,
+              taskId: prior,
+              note:
+                '이 문서에 대한 작업이 이미 돌고 있다. 다시 시작하지 마라. ' +
+                '결과는 완료되면 작업 결과로 따로 도착한다 — 지금 결과를 쓰지 말고 이 턴을 끝내라.'
+            }
+          }
+          runningJobs.delete(documentId)
+        }
+
         // 스킬을 지정하면 다듬어 둔 지시문을 그대로 쓴다 — 매번 새로 쓰면 품질이 흔들린다
         const skill = skillId ? resolveSkill(skillId) : undefined
         if (skillId && !skill) return { error: `skillId ${skillId}에 해당하는 스킬이 없습니다.` }
@@ -472,11 +511,17 @@ export function documentTools(
           }
 
           const info = start(documentId, finalInstruction, finalMode, plan)
+          runningJobs.set(documentId, info.id)
           return {
             taskId: info.id,
             status: info.status,
             chunks: plan.chunks.length,
             documentTokens: doc.tokens,
+            // 이 도구는 비동기다. 이 한 줄이 없어서, 모델이 "분석이 완료되었습니다"라며 작업 결과가
+            // 아니라 자기 기억에서 꺼낸 내용을 답으로 낸 일이 있었다.
+            note:
+              '작업을 백그라운드에서 시작했을 뿐이고 결과는 아직 없다. 완료되면 작업 결과로 따로 도착한다. ' +
+              '지금 분석·요약 결과를 쓰지 마라 — 무엇을 시작했는지 한 줄로 알리고 이 턴을 끝내라.',
             ...(skill ? { usedSkill: skill.name } : {})
           }
         } catch (e) {
