@@ -1,6 +1,7 @@
 import type { ModelMessage } from 'ai'
 import type { ChatItem, SessionMeta, SessionSearchHit } from '@shared/types'
-import { readJson, writeJson, deleteFile, listFiles } from '../storage/jsonStore'
+import { readJson, writeJson, deleteFile, deleteDir, listFiles } from '../storage/jsonStore'
+import { attachmentDir } from './attachments'
 
 export interface SessionData {
   meta: SessionMeta
@@ -40,6 +41,8 @@ export function saveSession(data: SessionData): void {
 
 export function deleteSession(id: string): void {
   deleteFile(`sessions/${id}.json`)
+  // 대화가 사라지면 그 대화에 붙였던 첨부 원본도 남길 이유가 없다
+  deleteDir(attachmentDir(id))
 }
 
 const MAX_TITLE = 80
