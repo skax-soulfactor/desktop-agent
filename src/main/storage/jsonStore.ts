@@ -33,6 +33,11 @@ export function deleteFile(file: string): void {
   if (existsSync(p)) rmSync(p)
 }
 
+/** 디렉토리를 통째로 지운다 (없으면 아무 일도 하지 않는다) */
+export function deleteDir(path: string): void {
+  if (existsSync(path)) rmSync(path, { recursive: true, force: true })
+}
+
 export function listFiles(subdir: string): string[] {
   const p = join(dataDir(), subdir)
   if (!existsSync(p)) return []

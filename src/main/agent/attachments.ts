@@ -1,8 +1,12 @@
 import mammoth from 'mammoth'
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import { documentStub, registerDocument } from './documents'
 import { estimateTokens } from '../llm/profile'
+import { dataDir } from '../storage/jsonStore'
 import type { AttachmentMeta, AttachmentPayload } from '@shared/types'
 
+/** 이 크기를 넘으면 본문을 메시지에 싣지 않는다. 파일 자체는 크기와 무관하게 디스크에 쓴다 */
 const MAX_FILE_BYTES = 15 * 1024 * 1024
 const MAX_INLINE_TEXT = 50_000
 
@@ -15,6 +19,51 @@ export type UserPart =
   | { type: 'text'; text: string }
   | { type: 'image'; image: string; mediaType?: string }
   | { type: 'file'; data: string; mediaType: string; filename?: string }
+
+/** 대화별 첨부 원본 보관 디렉토리 */
+export function attachmentDir(sessionId: string): string {
+  return join(dataDir(), 'attachments', sessionId)
+}
+
+/**
+ * 첨부 이름은 사용자가 고른 값이고 경로로 쓰기에는 신뢰할 수 없다.
+ * 디렉토리 성분과 상위 이동(..), Windows에서 금지된 문자를 걷어내고 파일명만 남긴다.
+ */
+function safeFileName(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? ''
+  const cleaned = base
+    // eslint-disable-next-line no-control-regex
+    .replace(/[<>:"|?*\x00-\x1f]/g, '_')
+    .replace(/^\.+/, '')
+    .trim()
+  return cleaned || 'attachment'
+}
+
+/**
+ * 첨부 원본을 디스크에 쓰고 절대 경로를 돌려준다.
+ *
+ * 이게 없어서 실제로 막힌 적이 있다. `.class` 파일을 붙이고 "디컴파일 해줘"라고 하면
+ * 모델에게는 "지원하지 않는 형식"이라는 문장 한 줄만 갔고 파일은 어디에도 없었다.
+ * 모델은 첨부 이름을 cwd의 파일처럼 여겨 javap를 부르고, 없다는 답을 받고, 디컴파일러를
+ * 내려받으려다 실패하고, 결국 44K 토큰을 쓰고 "파일을 다시 올려 달라"로 끝났다.
+ *
+ * 형식을 얼마나 지원하느냐와 무관하게, 첨부는 도구가 열 수 있는 실체로 남아야 한다.
+ * 모델이 내용을 읽지 못하는 형식일수록 셸 도구로 넘길 경로가 더 필요하다.
+ *
+ * 같은 이름이 다시 오면 덮어쓴다 — 같은 대화에서 같은 이름을 다시 올렸다면 새것이 대상이다.
+ */
+function saveAttachmentFile(sessionId: string, name: string, bytes: Buffer): string | null {
+  try {
+    const dir = attachmentDir(sessionId)
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, safeFileName(name))
+    writeFileSync(path, bytes)
+    return path
+  } catch {
+    // 디스크에 못 써도 인라인 경로는 살아 있어야 한다 — 경로 안내만 빠진다
+    return null
+  }
+}
 
 const TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|tsv|json|yaml|yml|xml|html|log|ts|js|py|java|c|cpp|sh)$/i
 
@@ -82,8 +131,29 @@ export function buildUserContent(parts: UserPart[], userText: string): string | 
 }
 
 /**
+ * 저장된 첨부 경로를 한 블록으로 안내한다.
+ *
+ * 첨부마다 한 줄씩 흩어 놓지 않고 끝에 한 번만 붙인다 — 좁은 창에서 첨부 개수만큼
+ * 안내가 불어나면 정작 처리할 내용이 밀린다.
+ */
+function pathsNote(saved: { name: string; path: string }[]): UserPart {
+  return {
+    type: 'text',
+    text:
+      `--- 첨부 원본 파일 ---\n` +
+      saved.map((s) => `${s.name} → ${s.path}`).join('\n') +
+      `\n이 경로들은 실제로 존재하는 파일이다. 내용이 위에 실리지 않은 첨부라도 ` +
+      `fs_read·shell_exec으로 이 경로를 열어 처리하라. 첨부 이름만으로 명령을 만들지 말고 ` +
+      `(작업 디렉토리에는 없다) 위 절대 경로를 그대로 써라. 사용자에게 파일을 다시 올려 달라고 하지 마라.\n` +
+      `--- 첨부 원본 끝 ---`
+  }
+}
+
+/**
  * 첨부를 모델이 이해할 수 있는 메시지 파트로 변환한다.
  * 이미지/PDF는 멀티모달 파트로 그대로, docx·텍스트류는 본문을 추출해 텍스트로 인라인.
+ *
+ * 형식과 무관하게 원본은 항상 디스크에 쓰고 경로를 알린다 — saveAttachmentFile 참고.
  */
 export async function buildAttachmentParts(
   attachments: AttachmentPayload[],
@@ -91,13 +161,23 @@ export async function buildAttachmentParts(
 ): Promise<{ parts: UserPart[]; metas: AttachmentMeta[] }> {
   const parts: UserPart[] = []
   const metas: AttachmentMeta[] = []
+  const saved: { name: string; path: string }[] = []
 
   for (const att of attachments) {
     metas.push({ name: att.name, mimeType: att.mimeType })
     const bytes = Buffer.from(att.dataBase64, 'base64')
 
+    // 인라인 여부와 무관하게 먼저 디스크에 쓴다. 모델이 읽지 못하는 형식일수록 경로가 답이다.
+    const path = saveAttachmentFile(ctx.sessionId, att.name, bytes)
+    if (path) saved.push({ name: att.name, path })
+
     if (bytes.byteLength > MAX_FILE_BYTES) {
-      parts.push({ type: 'text', text: `[첨부 "${att.name}"은 15MB를 초과해 읽지 못했습니다.]` })
+      parts.push({
+        type: 'text',
+        text: path
+          ? `[첨부 "${att.name}"은 15MB를 초과해 본문을 싣지 않았다. 파일은 아래 경로에 있으니 도구로 열어 처리하라.]`
+          : `[첨부 "${att.name}"은 15MB를 초과해 읽지 못했습니다.]`
+      })
       continue
     }
 
@@ -125,9 +205,14 @@ export async function buildAttachmentParts(
     } else {
       parts.push({
         type: 'text',
-        text: `[첨부 "${att.name}" (${att.mimeType || '알 수 없는 형식'})은 지원하지 않는 형식이라 내용을 읽지 못했습니다. 이미지, PDF, Word(docx), 텍스트 파일을 지원합니다.]`
+        text: path
+          ? `[첨부 "${att.name}" (${att.mimeType || '알 수 없는 형식'})은 네가 직접 읽을 수 있는 형식이 아니다. ` +
+            `아래 경로에 실제 파일이 있으니 도구로 열어 처리하라 — 형식을 확인하고(file·head), ` +
+            `필요하면 그 형식에 맞는 명령을 쓰면 된다. 못 한다고 답하기 전에 파일을 먼저 봐라.]`
+          : `[첨부 "${att.name}" (${att.mimeType || '알 수 없는 형식'})은 지원하지 않는 형식이라 내용을 읽지 못했습니다. 이미지, PDF, Word(docx), 텍스트 파일을 지원합니다.]`
       })
     }
   }
+  if (saved.length > 0) parts.push(pathsNote(saved))
   return { parts, metas }
 }
