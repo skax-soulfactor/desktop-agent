@@ -163,6 +163,10 @@ export function startDocumentTask(
           `(결과 약 ${estimateTokens(result.text).toLocaleString()}토큰).` +
           (result.unchanged > 0
             ? ` 다만 ${result.unchanged}개 조각은 재시도 후에도 원문이 그대로 남았다 — 그 부분이 처리되지 않았음을 사용자에게 알려라.`
+            : '') +
+          // 잘린 결과를 온전한 결과처럼 넘기면, 문장 중간에서 끝난 문서를 사용자가 그대로 받는다
+          (result.truncated > 0
+            ? ` 그리고 ${result.truncated}번의 생성이 출력 상한에 닿아 잘렸다 — 결과가 문장 중간에서 끝났을 수 있으니 그 사실을 사용자에게 알려라.`
             : '')
       )
     } catch (e) {

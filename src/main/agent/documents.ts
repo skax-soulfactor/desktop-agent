@@ -115,10 +115,21 @@ const TRANSFORM_PROMPT = `너는 긴 문서를 조각으로 나눠 처리하는 
 - 코드 블록(\`\`\`) 안의 코드, 식별자, 파일 경로는 원문 그대로 두어라. 그 밖의 모든 문장은 처리하라.
 - 줄바꿈·목록·표 같은 마크다운 서식은 입력과 같은 모양으로 낸다.`
 
+/**
+ * 병합기 지시.
+ *
+ * 조각 경계를 지우는 일이 여기 있다. 조각 처리기에도 "경계를 언급하지 마라"고 적어 두지만
+ * 지켜지지 않는다 — 항목 하나가 조각 둘로 갈리면 모델은 "(부분 코드)", "이후 코드는 제공되지
+ * 않음" 같은 말을 붙이고, 그게 최종 문서까지 그대로 실려 나갔다. 갈린 반쪽들을 함께 보는 건
+ * 병합기뿐이므로, 고칠 수 있는 자리도 여기뿐이다.
+ */
 const REDUCE_PROMPT = `너는 여러 조각을 각각 처리한 결과를 하나로 합치는 병합기다.
 
 - 아래 부분 결과들을 원래 지시에 맞는 하나의 완결된 결과로 합쳐라.
 - 중복을 제거하고 순서를 정리하되, 부분 결과에 없는 내용을 지어내지 마라.
+- 같은 항목이 여러 부분 결과에 나뉘어 있으면 하나로 합쳐라. 원문이 조각으로 나뉘어 처리됐을
+  뿐이므로 "부분 코드", "이후 내용은 제공되지 않음", "조각이 잘림" 같은 단서는 지워라 —
+  나머지 반쪽은 다른 부분 결과에 있다.
 - 결과만 출력하라. 병합 과정에 대한 설명을 붙이지 마라.`
 
 export interface DocumentJobHooks {
@@ -212,6 +223,8 @@ export interface DocumentJobResult {
   chunks: number
   /** 재시도 후에도 원문 그대로였던 조각 수 — 결과가 부분적으로만 처리됐음을 알리는 데 쓴다 */
   unchanged: number
+  /** 출력 상한에 닿아 잘린 호출 수. 결과가 문장 중간에서 끝났다는 뜻이다 */
+  truncated: number
   inputTokens: number
   outputTokens: number
 }
@@ -302,10 +315,11 @@ export async function runDocumentJob(
   let inputTokens = 0
   let outputTokens = 0
   let unchanged = 0
+  let truncated = 0
   const parts: string[] = []
 
   const runChunk = async (chunk: string, i: number, hint: string): Promise<string> => {
-    const { text, usage } = await completeText({
+    const { text, usage, finishReason } = await completeText({
       model,
       // 지시를 시스템 프롬프트 맨 앞에도 둔다 — 규칙 목록에 묻히면 모델이 원문을 그대로 뱉는다
       system: `${instruction}\n\n${TRANSFORM_PROMPT}${hint}`,
@@ -315,6 +329,7 @@ export async function runDocumentJob(
     })
     inputTokens += usage.inputTokens ?? 0
     outputTokens += usage.outputTokens ?? 0
+    if (finishReason === 'length') truncated++
     return text.trim()
   }
 
@@ -365,21 +380,37 @@ export async function runDocumentJob(
   )
 
   if (mode === 'transform' || parts.length === 1) {
-    return { text: parts.join('\n\n'), chunks: chunks.length, unchanged, inputTokens, outputTokens }
+    return { text: parts.join('\n\n'), chunks: chunks.length, unchanged, truncated, inputTokens, outputTokens }
   }
+
+  /**
+   * 병합 한 번에 넣을 부분 결과의 크기.
+   *
+   * 조각 단계와 달리 여기서는 출력 상한을 봐야 한다. 조각 단계의 reduce는 원문을 요약하므로
+   * 결과가 입력보다 훨씬 짧지만, 병합은 요약이 아니라 이어 붙이기다 — REDUCE_PROMPT는
+   * 중복만 걷어내고 부분 결과에 없는 내용은 만들지 말라고 시킨다. 그래서 병합 결과의 길이는
+   * 넣은 부분 결과의 합에 가깝다.
+   *
+   * 프롬프트 예산으로 잡았더니 실제로 잘렸다. 창 8,192(출력 상한 2,048)인 로컬 모델에서
+   * 조각 4개를 한 번에 병합했고, 결과가 출력 상한에 닿아 "필드 `fu"처럼 단어 중간에서
+   * 끊긴 채 사용자에게 갔다. 출력 상한 기준으로 잡으면 병합이 여러 번으로 나뉘는 대신
+   * 각 병합의 결과가 창 안에 들어온다.
+   */
+  const reduceOverhead = estimateTokens(REDUCE_PROMPT + instruction) + 200
+  const mergeBudget = chunkBudget(profile, reduceOverhead, 'transform')
 
   // 요약·분석은 부분 결과를 다시 합친다. 합칠 것들이 또 창을 넘으면 단계적으로 줄인다.
   let pending = parts
   let round = 0
   while (pending.length > 1) {
-    const groups = splitIntoChunks(pending.join('\n\n---\n\n'), chunkBudget(profile, overhead, 'reduce'))
+    const groups = splitIntoChunks(pending.join('\n\n---\n\n'), mergeBudget)
     const next: string[] = []
     round++
     for (let g = 0; g < groups.length; g++) {
       if (hooks.signal.aborted) throw new Error('사용자가 중지했습니다.')
       const stepId = `reduce-${round}-${g}`
       hooks.onStepStart(stepId, `병합 ${round}단계 ${g + 1}/${groups.length} (부분 결과 ${pending.length}개)`)
-      const { text, usage } = await completeText({
+      const { text, usage, finishReason } = await completeText({
         model,
         system: REDUCE_PROMPT,
         prompt: `## 원래 지시\n${instruction}\n\n## 부분 결과들\n${groups[g]}`,
@@ -388,14 +419,22 @@ export async function runDocumentJob(
       })
       inputTokens += usage.inputTokens ?? 0
       outputTokens += usage.outputTokens ?? 0
-      hooks.onStepEnd(stepId, 'done', text.trim().slice(0, 400))
+      if (finishReason === 'length') truncated++
+      hooks.onStepEnd(
+        stepId,
+        finishReason === 'length' ? 'error' : 'done',
+        (finishReason === 'length' ? '출력 상한에 닿아 이 병합 결과가 잘렸습니다.\n\n' : '') + text.trim().slice(0, 400)
+      )
       next.push(text.trim())
     }
-    // 한 단계에서 줄지 않으면 무한 루프가 되므로 멈춘다
-    if (next.length >= pending.length) return { text: next.join('\n\n'), chunks: chunks.length, unchanged, inputTokens, outputTokens }
+    // 한 단계에서 줄지 않으면 무한 루프가 되므로 멈춘다.
+    // 이어 붙여 돌려주므로 내용이 사라지지는 않는다 — 중복이 남을 뿐이다.
+    if (next.length >= pending.length) {
+      return { text: next.join('\n\n'), chunks: chunks.length, unchanged, truncated, inputTokens, outputTokens }
+    }
     pending = next
   }
-  return { text: pending[0] ?? '', chunks: chunks.length, unchanged, inputTokens, outputTokens }
+  return { text: pending[0] ?? '', chunks: chunks.length, unchanged, truncated, inputTokens, outputTokens }
 }
 
 /**
