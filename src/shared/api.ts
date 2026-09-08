@@ -16,6 +16,7 @@ import type {
   MemoryStats,
   ModelTier,
   NetworkConfig,
+  NotificationActivation,
   NotificationRecord,
   Peer,
   PeerPolicy,
@@ -148,6 +149,8 @@ export interface DesktopAgentApi {
   markNotificationsRead(ids?: string[]): Promise<number>
   clearNotifications(): Promise<void>
   onNotificationsChanged(cb: () => void): () => void
+  /** OS 알림 클릭 — 알림이 난 자리(관련 대화, 없으면 알림 화면)로 이동시킨다 */
+  onNotificationActivated(cb: (a: NotificationActivation) => void): () => void
 
   // OS 알림 설정 화면 열기
   openNotificationSettings(): Promise<void>

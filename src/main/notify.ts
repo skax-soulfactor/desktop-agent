@@ -1,6 +1,6 @@
 import { app, Notification, type BrowserWindow } from 'electron'
 import type { NotificationKind, NotificationRecord } from '@shared/types'
-import { addNotification, unreadCount } from './notifications/store'
+import { addNotification, markNotificationsRead, unreadCount } from './notifications/store'
 
 /** 작업표시줄 깜빡임 해제 리스너를 창마다 한 번만 등록하기 위한 가드 */
 const flashWired = new WeakSet<BrowserWindow>()
@@ -24,12 +24,42 @@ function flash(win: BrowserWindow): void {
 }
 
 /**
+ * OS 알림을 클릭했을 때 — 창을 앞으로 가져오고, 그 알림이 난 자리로 데려간다.
+ *
+ * 창만 띄우면 사용자가 무엇 때문에 불렸는지 다시 찾아야 한다. 작업 완료·실패 알림이
+ * 특히 그렇다. 승인·질문처럼 모달이 뜨는 알림은 창이 앞으로 나오는 것만으로 충분하지만,
+ * 그 경우에도 sessionId가 있으면 모달 뒤 화면이 관련 대화라 어긋나지 않는다.
+ *
+ * 클릭은 사용자가 그 알림을 확인한 것이므로 읽음으로 넘긴다 — 배지에 남겨 두면
+ * 이미 처리한 일이 계속 미확인으로 보인다.
+ */
+function activate(win: BrowserWindow, rec: NotificationRecord | null): void {
+  if (win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+  if (!rec) return
+  try {
+    markNotificationsRead([rec.id])
+    refreshBadge()
+    win.webContents.send('notifications:changed')
+    win.webContents.send('notifications:activate', {
+      id: rec.id,
+      kind: rec.kind,
+      ...(rec.sessionId ? { sessionId: rec.sessionId } : {})
+    })
+  } catch (e) {
+    console.error('[notify] 이동 실패:', e)
+  }
+}
+
+/**
  * 알림 1건을 기록하고, 앱이 백그라운드에 있을 때만 OS 알림을 띄운다.
  *
  * OS 알림이 꺼져 있거나 창을 보고 있어서 표시되지 않은 건도 기록에는 남으므로,
  * 알림 화면에서 지난 내역을 다시 확인할 수 있다.
  * 미확인 건수는 독/작업표시줄 배지로 표시되고, 알림 화면에서 확인하면 사라진다.
- * OS 알림을 클릭하면 창을 앞으로 가져온다.
+ * OS 알림을 클릭하면 창을 앞으로 가져오고, 알림이 난 자리로 데려간다(activate 참고).
  */
 export function notifyIfBackground(
   win: BrowserWindow,
@@ -62,12 +92,7 @@ export function notifyIfBackground(
     if (!deliver) return
     flash(win)
     const n = new Notification({ title, body: text.slice(0, 200) })
-    n.on('click', () => {
-      if (win.isDestroyed()) return
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
-    })
+    n.on('click', () => activate(win, rec))
     n.show()
   } catch (e) {
     // 알림 실패가 본 작업을 막으면 안 된다

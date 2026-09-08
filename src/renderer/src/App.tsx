@@ -46,6 +46,24 @@ export default function App(): JSX.Element {
     return window.api.onNotificationsChanged(() => void refresh())
   }, [page])
 
+  /**
+   * OS 알림 클릭 — 알림이 난 자리로 데려간다.
+   *
+   * 창만 앞으로 나오면 무엇 때문에 불렸는지 사용자가 직접 다시 찾아야 한다.
+   * 작업 완료·실패 알림이 특히 그렇다(승인·질문은 모달이 함께 뜬다).
+   * 대화에서 난 알림이면 그 대화를, 아니면 알림 화면을 연다.
+   */
+  useEffect(() => {
+    return window.api.onNotificationActivated((a) => {
+      if (a.sessionId) {
+        setJumpSession({ id: a.sessionId, nonce: Date.now() })
+        setPage('chat')
+      } else {
+        setPage('notifications')
+      }
+    })
+  }, [])
+
   /** 지식베이스·알림에서 관련 대화 열기 */
   const openSession = (sessionId: string): void => {
     setJumpSession({ id: sessionId, nonce: Date.now() })
