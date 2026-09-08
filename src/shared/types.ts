@@ -486,3 +486,15 @@ export interface NotificationRecord {
   read: boolean
   sessionId?: string
 }
+
+/**
+ * OS 알림을 클릭했을 때 렌더러로 보내는 이동 요청.
+ *
+ * 창을 앞으로 가져오는 것만으로는 부족하다 — 사용자는 무엇 때문에 불렸는지 직접 다시
+ * 찾아야 했다. 알림이 대화에서 났으면 그 대화로, 아니면 알림 화면으로 데려간다.
+ */
+export interface NotificationActivation {
+  id: string
+  kind: NotificationKind
+  sessionId?: string
+}

@@ -16,6 +16,7 @@ import type {
   MemoryStats,
   ModelTier,
   NetworkConfig,
+  NotificationActivation,
   NotificationRecord,
   Peer,
   PeerPolicy,
@@ -182,6 +183,11 @@ const api: DesktopAgentApi = {
     const handler = (): void => cb()
     ipcRenderer.on('notifications:changed', handler)
     return () => ipcRenderer.removeListener('notifications:changed', handler)
+  },
+  onNotificationActivated: (cb: (a: NotificationActivation) => void): (() => void) => {
+    const handler = (_e: unknown, a: NotificationActivation): void => cb(a)
+    ipcRenderer.on('notifications:activate', handler)
+    return () => ipcRenderer.removeListener('notifications:activate', handler)
   },
 
   openNotificationSettings: (): Promise<void> =>
