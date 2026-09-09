@@ -122,6 +122,41 @@ function windowsShellNote(command: string, stderr: string): string | undefined {
   )
 }
 
+/** 명령을 이어 붙이거나 출력을 돌리는 연산자 — 하나라도 있으면 접두사는 무엇이 실행될지 못 정한다 */
+const CHAINED = /[;&|`\n]|\$\(|>/
+
+/** 하위 명령이 실제 동작을 정하는 명령들. `systemctl *`은 restart도 suspend도 함께 열어 준다 */
+const SUBCOMMAND_DRIVEN =
+  /^(?:systemctl|loginctl|service|git|gh|docker|podman|kubectl|npm|pnpm|yarn|pacman|apt|apt-get|dnf|snap|flatpak)$/i
+
+/**
+ * "세션/항상 허용" 규칙으로 제안할 패턴. 규칙은 접두사 매칭이라 여기서 좁히지 않으면
+ * 사용자가 한 번 누른 허용이 그 접두사로 시작하는 모든 명령으로 번진다.
+ *
+ * 예전에는 첫 낱말만 떼어 `<명령> *`를 제안했다. 그런데 이 에이전트가 보내는 명령은 대부분
+ * `echo "===상태==="; ls ...; journalctl ...`처럼 여러 개를 이어 붙인 것이라, 그 한 줄을 세션
+ * 허용으로 넘기면 `echo *` 규칙이 생기고 이후로는 echo로 시작하기만 하면 뒤에 무엇이 붙든
+ * 승인 없이 실행됐다(감사 로그에 그렇게 통과한 호출이 남아 있다). 접두사가 실제 실행 내용을
+ * 전혀 제한하지 못하는 경우다.
+ *
+ * 그래서 이어 붙이는 연산자가 있으면 글롭을 제안하지 않고 그 명령 자체를 준다. 단일 명령일
+ * 때만 접두사를 제안하되, 하위 명령이 동작을 정하는 계열은 그 하위 명령까지 넣는다.
+ * 좁은 패턴은 다음번에 다시 물어보게 될 뿐이지만, 넓은 패턴은 묻지 않고 지나간다.
+ * 사용자가 더 넓게 쓰고 싶으면 승인 창에서 직접 고칠 수 있다.
+ */
+function shellPattern(command: string): string {
+  const cmd = command.trim()
+  if (!cmd) return command
+  if (CHAINED.test(cmd)) return cmd
+  const tokens = cmd.split(/\s+/)
+  const head = tokens[0]
+  if (!head) return cmd
+  if (!SUBCOMMAND_DRIVEN.test(head)) return `${head} *`
+  let i = 1
+  while (i < tokens.length && tokens[i].startsWith('-')) i++
+  return tokens[i] ? `${tokens.slice(0, i + 1).join(' ')} *` : `${head} *`
+}
+
 export const shellExec: DesktopToolDef<
   z.ZodObject<{ command: z.ZodString; cwd: z.ZodOptional<z.ZodString> }>
 > = {
@@ -142,10 +177,7 @@ export const shellExec: DesktopToolDef<
   }),
   describeCall: (i) => `셸 실행: ${i.command}${i.cwd ? ` (cwd: ${i.cwd})` : ''}`,
   targetOf: (i) => i.command,
-  suggestedPattern: (i) => {
-    const first = i.command.trim().split(/\s+/)[0] ?? ''
-    return first ? `${first} *` : i.command
-  },
+  suggestedPattern: (i) => shellPattern(i.command),
   execute(i) {
     return new Promise((resolvePromise) => {
       const cwd = i.cwd ? expandHome(i.cwd) : homedir()
