@@ -167,6 +167,12 @@ export interface MemoryOpSummary {
 export type ChatEvent =
   | { type: 'turn-start' }
   | { type: 'text-delta'; text: string }
+  /**
+   * 모델의 사고 과정. 본문이 아니라 "지금 무엇을 생각 중인지"를 보여 주는 용도라
+   * 대화 기록(ChatItem)에는 남기지 않는다 — 세션 파일의 messages에는 이미 그대로 들어 있다.
+   * 사고를 내지 않는 모델도 있으므로 이 이벤트가 한 번도 안 올 수 있다.
+   */
+  | { type: 'reasoning-delta'; text: string }
   | { type: 'tool-call'; toolCallId: string; toolName: string; summary: string }
   | { type: 'tool-result'; toolCallId: string; status: 'done' | 'denied' | 'error'; output: string }
   | { type: 'memory-saved'; ops: MemoryOpSummary[] }

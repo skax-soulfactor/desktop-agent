@@ -740,6 +740,10 @@ export async function runTurn(
       if (part.type === 'text-delta') {
         appendText(part.text)
         send({ type: 'text-delta', text: part.text })
+      } else if (part.type === 'reasoning-delta') {
+        // 흘려보내기만 한다. 사고는 대화 기록에 쌓지 않는다 — 화면의 "생각 중" 표시를
+        // 실제 내용으로 채우는 것이 목적이고, 원문은 세션 파일의 messages에 이미 남는다.
+        send({ type: 'reasoning-delta', text: part.text })
       } else if (part.type === 'tool-call') {
         const summary = summarizeCall(part.toolName, part.input)
         const item: ChatItem & { kind: 'tool' } = {

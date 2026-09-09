@@ -52,6 +52,20 @@ function splitLeadingQuote(text: string): { quote?: string; body: string } {
   return { quote: q.join('\n'), body: lines.slice(i).join('\n') }
 }
 
+/**
+ * 흘러오는 사고에서 한 줄 미리보기를 만든다. 마지막 비어 있지 않은 줄을 쓴다 —
+ * 스트리밍 중에는 그 줄이 지금 쓰이고 있는 문장이라 "무엇을 생각 중인지"에 가장 가깝다.
+ * 머리글 기호(#)는 떼어 낸다. 한 줄에 다 안 들어가는 것은 CSS가 말줄임으로 자른다.
+ */
+function lastLine(text: string): string {
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim()
+    if (t) return t.replace(/^#+\s*/, '').replace(/^[-*]\s+/, '')
+  }
+  return ''
+}
+
 /** 복사·시간·토큰 메타 행 — 사용자/에이전트 메시지 공용 */
 function MsgMeta({
   at,
@@ -184,6 +198,14 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
   const [busy, setBusy] = useState(false)
   /** 응답 대기 중 실시간 진행 상태 — 첫 출력 전/도구 대기 구간을 채운다 */
   const [progress, setProgress] = useState<{ label: string; kind: 'thinking' | 'tool' } | null>(null)
+  /**
+   * 지금 '생각 중'인 내용. 모델이 흘려보내는 사고를 이번 생각 구간 동안 이어 붙인다.
+   * 본문이 나오거나 도구를 부르면 그 구간이 끝난 것이므로 비운다.
+   * 사고를 내지 않는 모델에서는 계속 비어 있고, 그때는 예전처럼 "생각하고 있어요"만 보인다.
+   */
+  const [thought, setThought] = useState('')
+  /** 사고를 한 줄 미리보기로 둘지, 전문을 펼칠지 — 사용자가 정하면 그 선택을 세션 동안 유지한다 */
+  const [thoughtOpen, setThoughtOpen] = useState(false)
   /** 진행 표시에 곁들일 경과 시간(초) */
   const [elapsed, setElapsed] = useState(0)
   /**
@@ -201,6 +223,8 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [error, setError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  /** 펼친 사고 상자 — 새 사고가 흘러올 때마다 맨 아래를 보게 한다 */
+  const thoughtRef = useRef<HTMLPreElement>(null)
   const activeIdRef = useRef<string | null>(null)
   activeIdRef.current = activeId
   /** 방금 복사한 메시지 인덱스 (버튼 피드백용) */
@@ -286,6 +310,12 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
     // 마운트 이후 같은 대화를 다시 요청받는 경우까지 nonce로 반응한다
   }, [jumpSession?.nonce])
 
+  // 사고가 흘러오는 동안 펼친 상자는 맨 아래를 따라간다 (상자 안에서만 스크롤되므로 본문은 안 흔들린다)
+  useEffect(() => {
+    const el = thoughtRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [thought])
+
   // ⌘/Ctrl+B — 사이드바 접기/펼치기 (편집 중에도 동작해야 하므로 입력 필드를 가리지 않는다)
   // e.key는 입력기·자판 배열에 따라 'b'가 아닌 값으로 들어올 수 있어 물리 키(e.code)를 우선 본다
   useEffect(() => {
@@ -308,9 +338,13 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
         // 보낼 때 이미 시계를 켰다면 그대로 둔다 (여기서 덮으면 몇백 ms가 되감긴다)
         setTurnStartedAt((prev) => prev ?? Date.now())
         setProgress({ label: '생각하고 있어요', kind: 'thinking' })
+        setThought('')
+      } else if (e.type === 'reasoning-delta') {
+        setThought((prev) => prev + e.text)
       } else if (e.type === 'text-delta') {
         // 텍스트가 실시간으로 흐르는 동안에는 스트리밍 자체가 진행 표시이므로 인디케이터를 감춘다
         setProgress(null)
+        setThought('')
         setItems((prev) => {
           const last = prev[prev.length - 1]
           if (last && last.kind === 'assistant') {
@@ -320,6 +354,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
         })
       } else if (e.type === 'tool-call') {
         setProgress({ label: e.summary, kind: 'tool' })
+        setThought('')
         setItems((prev) => [
           ...prev,
           {
@@ -376,6 +411,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
         setBusy(false)
         setTurnStartedAt(null)
         setProgress(null)
+        setThought('')
         if (e.error) setError(e.error)
         // 이 턴의 토큰 사용량을 마지막 에이전트 메시지에 귀속 (저장본과 동일한 위치)
         if (e.usage) {
@@ -509,6 +545,7 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
       setBusy(running)
       setTurnStartedAt(startedAt)
       setProgress(running ? { label: '생각하고 있어요', kind: 'thinking' } : null)
+      setThought('')
       setRunningTasks((await window.api.listTasks(id)).filter((t) => t.status === 'running'))
     }
   }
@@ -909,16 +946,36 @@ export default function ChatView({ jumpSession, onOpenMemory }: ChatViewProps = 
           })}
           {busy && progress && (
             <div className="msg-wrap assistant">
-              <div className="progress-bubble">
-                <span className="dots" aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-                <span className="plabel">
-                  {progress.kind === 'tool' ? `${progress.label} 실행 중` : progress.label}
-                </span>
-                {elapsed > 0 && <span className="pelapsed">{elapsed}초</span>}
+              <div className={`progress-bubble${thought ? ' has-thought' : ''}`}>
+                <div className="progress-head">
+                  <span className="dots" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <span className="plabel">
+                    {progress.kind === 'tool'
+                      ? `${progress.label} 실행 중`
+                      : thought
+                        ? lastLine(thought)
+                        : progress.label}
+                  </span>
+                  {elapsed > 0 && <span className="pelapsed">{elapsed}초</span>}
+                  {thought && (
+                    <button
+                      className="pthought-toggle"
+                      onClick={() => setThoughtOpen((v) => !v)}
+                      title={thoughtOpen ? '사고 과정 접기' : '사고 과정 펼치기'}
+                    >
+                      {thoughtOpen ? '▾' : '▸'}
+                    </button>
+                  )}
+                </div>
+                {thought && thoughtOpen && (
+                  <pre className="pthought" ref={thoughtRef}>
+                    {thought}
+                  </pre>
+                )}
               </div>
             </div>
           )}
