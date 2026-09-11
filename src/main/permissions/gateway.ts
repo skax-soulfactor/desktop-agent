@@ -10,19 +10,59 @@ import {
 import { searchLessons } from '../memory/store'
 import { notifyIfBackground } from '../notify'
 
-/** 규칙과 무관하게 항상 차단하는 파괴적 명령 (셸 도구용) */
-const HARD_BLOCKLIST = [
-  /rm\s+(-[a-z]*\s+)*(\/|~\/?$|\/\*)/i,
-  /mkfs/i,
-  /dd\s+if=/i,
-  /:\(\)\s*\{\s*:\|:&\s*\}/,
-  /shutdown|reboot\s/i,
-  /format\s+[a-z]:/i,
-  /del\s+\/[sq]\s+[a-z]:\\/i
+/**
+ * 셸 문자열에서 "명령 이름이 올 수 있는 자리"만 뽑는다.
+ *
+ * 예전에는 명령 전체에 정규식을 그냥 걸었다. 그래서 읽기 전용 조회가 인자에 위험한 낱말을
+ * 담고 있다는 이유만으로 막혔다 — 부팅 로그에서 전원 관련 기록을 찾으려던
+ * `journalctl -b -1 | grep -iE "suspend|hibernate|shutdown|power"`가 실제로 차단됐고,
+ * 사운드 문제를 진단하던 에이전트는 그 턴에서 단서를 잃었다(감사 로그에 남아 있다).
+ * grep 패턴 안의 shutdown은 데이터지 명령이 아니다.
+ *
+ * 그래서 인용 구간은 통째로 지우고(그 안은 데이터다), 남은 부분을 셸 구분자와
+ * "뒤 낱말을 다시 명령으로 실행하는" 래퍼로 잘라 각 조각의 첫 낱말만 명령으로 본다.
+ * 다만 `sh -c "..."`의 인용 안은 데이터가 아니라 실행될 명령이므로 지우기 전에 꺼내 재귀로 본다.
+ *
+ * 인용 안의 `$(...)`처럼 여기서 놓치는 구성이 남는다. 이 목록은 샌드박스가 아니라 사고 방지턱이고,
+ * shell_exec은 no_new_privs 아래에서 돌아 전원 제어 명령이 통과해도 권한이 없어 실패한다
+ * (권한 상승 시도는 isElevationAttempt가 따로 막는다). 우회 가능성보다 정상 조회를 막지 않는 쪽이 중요하다.
+ */
+const SHELL_C_BODY = /\b(?:sh|bash|zsh|dash|ksh)\s+(?:-[a-z]+\s+)*-c\s+(['"])([\s\S]*?)\1/gi
+const QUOTED = /'[^']*'|"[^"]*"/g
+const SEPARATORS =
+  /[\n;|&()`]+|\$\(|\bxargs\s+(?:-\S+\s+)*|\s-exec\s+|\b(?:time|nohup|env|nice|watch|sudo|doas|pkexec|runas|command|exec)\s+/gi
+
+function commandHeads(command: string, depth = 0): string[] {
+  const heads: string[] = []
+  if (depth < 3) {
+    for (const m of command.matchAll(SHELL_C_BODY)) heads.push(...commandHeads(m[2], depth + 1))
+  }
+  const bare = command.replace(SHELL_C_BODY, ' ').replace(QUOTED, ' ')
+  for (const part of bare.split(SEPARATORS)) {
+    const head = part.trim()
+    if (head) heads.push(head)
+  }
+  return heads
+}
+
+/** 명령 자리에 왔을 때만 파괴적인 것들 */
+const DESTRUCTIVE_HEAD = [
+  /^(?:shutdown|reboot|poweroff|halt)\b/i,
+  /^systemctl\s+(?:-\S+\s+)*(?:reboot|poweroff|halt|kexec)\b/i,
+  /^init\s+[06]\b/i,
+  /^mkfs(?:\.\S+)?\b/i,
+  /^dd\s+[^|]*\bif=/i,
+  /^rm\s+(?:-[a-z]*\s+)*(?:\/|~\/?$|\/\*)/i,
+  /^format\s+[a-z]:/i,
+  /^del\s+\/[sq]\s+[a-z]:\\/i
 ]
 
+/** 조각내면 형태가 깨져 명령 전체에서 봐야 하는 것 (포크 폭탄) */
+const DESTRUCTIVE_WHOLE = [/:\(\)\s*\{\s*:\|:&\s*\}/]
+
 export function isHardBlocked(command: string): boolean {
-  return HARD_BLOCKLIST.some((re) => re.test(command))
+  if (DESTRUCTIVE_WHOLE.some((re) => re.test(command))) return true
+  return commandHeads(command).some((h) => DESTRUCTIVE_HEAD.some((re) => re.test(h)))
 }
 
 /**
