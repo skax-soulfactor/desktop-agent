@@ -1,4 +1,4 @@
-import { streamText, stepCountIs, type ToolSet } from 'ai'
+import { streamText, stepCountIs, type LanguageModelUsage, type ToolSet } from 'ai'
 import { platform, homedir } from 'os'
 import type { BrowserWindow } from 'electron'
 import type { AttachmentPayload, ChatEvent, ChatItem } from '@shared/types'
@@ -18,7 +18,13 @@ import {
 import { isElevationEnabled } from '../permissions/elevation'
 import { buildMemoryContext } from '../memory/recall'
 import { extractMemories } from '../memory/extract'
-import { getSession, saveSession, appendToSession, addSessionUsage } from './sessions'
+import {
+  getSession,
+  saveSession,
+  appendToSession,
+  addSessionUsage,
+  dropTrailingUserMessage
+} from './sessions'
 import { recordUsage } from '../usage/store'
 import { taskTools, listTasks, startDocumentTask } from './tasks'
 import { scheduleTools } from './scheduler'
@@ -503,6 +509,19 @@ function citedOwnWrites(items: ChatItem[]): string[] {
 const REPEAT_LIMIT = 2
 
 /**
+ * 빈 응답을 되받았을 때 남겨 볼 최소 도구 집합.
+ *
+ * 도구를 전부 붙이면 본문 0자로 끝나고 전부 빼면 멀쩡히 답하는 모델이 있었다. 상한을 4배로
+ * 올려도 같았으니 예산 문제가 아니라 도구 페이로드 문제다. 전부 아니면 전무 사이에 한 칸을
+ * 둔다 — 실제로 불리는 것은 대부분 이 넷이고(세션 전수 조사: shell_exec 39, fs_read 18,
+ * fs_list 10, web_search 2), 이만큼이라도 살아 있으면 확인이 필요한 질문에 답할 수 있다.
+ *
+ * 어느 칸에서 답이 나왔는지가 곧 원인을 가리킨다. 이 집합에서 되면 도구의 개수나 크기가
+ * 문제이고, 여기서도 안 되면 도구를 붙이는 것 자체가 문제다.
+ */
+const CORE_TOOL_NAMES = ['shell_exec', 'fs_read', 'fs_list', 'web_search']
+
+/**
  * 같은 문단을 되풀이하는지 보기 위한 비교용 열쇠. 비교할 가치가 없으면 null.
  *
  * 도구 호출 차단만 세었더니 놓쳤다 — 모델은 호출 인자를 조금씩 바꿔 차단을 피하면서
@@ -518,6 +537,21 @@ const REPEAT_LIMIT = 2
 function textKey(text: string): string | null {
   const norm = text.replace(/\s+/g, ' ').trim()
   return norm.length < 30 ? null : norm.slice(0, 120)
+}
+
+/**
+ * 두 호출의 사용량을 더한다. 한 턴이 두 번의 요청으로 끝나는 경우(도구 없이 재시도)에도
+ * 사용자가 보는 숫자는 그 턴에 실제로 쓴 전부여야 한다.
+ */
+function addUsage(a: LanguageModelUsage, b: LanguageModelUsage): LanguageModelUsage {
+  const add = (x?: number, y?: number): number =>
+    (Number.isFinite(x) ? (x as number) : 0) + (Number.isFinite(y) ? (y as number) : 0)
+  return {
+    ...b,
+    inputTokens: add(a.inputTokens, b.inputTokens),
+    outputTokens: add(a.outputTokens, b.outputTokens),
+    totalTokens: add(a.totalTokens, b.totalTokens)
+  }
 }
 
 /**
@@ -684,21 +718,6 @@ export async function runTurn(
       send({ type: 'notice', text: warning })
     }
 
-    const result = streamText({
-      model,
-      system,
-      messages,
-      tools,
-      stopWhen: [
-        stepCountIs(profile.maxSteps),
-        // 같은 조회만 되풀이하는 턴은 스스로 끝나지 않는다. 차단이 쌓이면 여기서 끊는다.
-        (): boolean => spinning() >= REPEAT_LIMIT
-      ],
-      ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
-      ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
-      abortSignal: abort.signal
-    })
-
     // 턴이 어떤 이유로 끝났는가. 앱이 finishReason을 보지 않아, 문장 중간에서 끊긴 답변과
     // 정상 종료를 구분할 수단이 없었다. 'stop'이 아닌 모든 종료는 사용자에게 알린다 —
     // 무엇 때문에 멈췄는지 모르면 사용자에게는 앱이 답을 하다 만 것으로만 보인다.
@@ -735,98 +754,182 @@ export async function runTurn(
       toolTokens +
       messages.reduce((n, m) => n + estimateTokens(JSON.stringify(m)), 0)
     let firstStepInput = 0
+    /**
+     * 이번 턴에 모델이 흘려보낸 사고(reasoning) 글자 수.
+     *
+     * 추론 모델은 답을 쓰기 전에 사고를 먼저 낸다. 그 파트를 앱이 안 받으면, 사고만 하다
+     * 상한에 걸린 턴이 화면에는 완전한 무응답으로 보인다 — 무엇이 일어났는지 알 방법이
+     * 사라진다. 본문을 대신하지는 않지만, 비어 있을 때 그 사실을 말해 줄 수는 있다.
+     */
+    let reasoningChars = 0
 
-    for await (const part of result.fullStream) {
-      if (part.type === 'text-delta') {
-        appendText(part.text)
-        send({ type: 'text-delta', text: part.text })
-      } else if (part.type === 'reasoning-delta') {
-        // 흘려보내기만 한다. 사고는 대화 기록에 쌓지 않는다 — 화면의 "생각 중" 표시를
-        // 실제 내용으로 채우는 것이 목적이고, 원문은 세션 파일의 messages에 이미 남는다.
-        send({ type: 'reasoning-delta', text: part.text })
-      } else if (part.type === 'tool-call') {
-        const summary = summarizeCall(part.toolName, part.input)
-        const item: ChatItem & { kind: 'tool' } = {
-          kind: 'tool',
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          summary,
-          status: 'running'
-        }
-        // 사용자가 이미 거절한 도구를 다시 부르는 중이다. 한 번의 재시도까지만 지나가게 한다.
-        if (declinedTools.has(part.toolName)) refusalSignals += REPEAT_LIMIT
-        toolItems.set(part.toolCallId, item)
-        newItems.push(item)
-        noteTextBlock()
-        textBlock = null
-        send({ type: 'tool-call', toolCallId: part.toolCallId, toolName: part.toolName, summary })
-      } else if (part.type === 'tool-result') {
-        const output = JSON.stringify(part.output)
-        const item = toolItems.get(part.toolCallId)
-        // declined는 문서 처리 확인 흐름이, denied는 권한 게이트가 쓰는 표시다. 둘 다 거절이다 —
-        // declined를 빼먹어 사용자가 취소한 작업이 카드에서 '완료'로 보이고 있었다.
-        const status: 'done' | 'denied' | 'error' =
-          output.includes('"denied":true') || output.includes('"declined":true')
-            ? 'denied'
-            : output.includes('"error":')
-              ? 'error'
-              : 'done'
-        if (item) {
-          item.status = status
-          item.output = output.slice(0, 2000)
-        }
-        if (status === 'denied') {
-          declinedTools.add(item?.toolName ?? part.toolName)
-          refusalSignals++
-        }
-        if (output.includes('"taskId":') && output.includes('"running"')) spawnedTask = true
-        send({ type: 'tool-result', toolCallId: part.toolCallId, status, output: output.slice(0, 2000) })
-      } else if (part.type === 'tool-error') {
-        // 없는 도구 이름이나 스키마에 맞지 않는 인자 — 로컬 모델에서 흔하다.
-        // SDK가 오류를 모델에 되돌려 주므로 대화는 이어지지만, 카드를 확정하고
-        // 실패 신호를 남기지 않으면 '실행 중'으로 굳어 버린다.
-        const message = part.error instanceof Error ? part.error.message : String(part.error)
-        let item = toolItems.get(part.toolCallId)
-        if (!item) {
-          // tool-call 파트 없이 tool-error만 오는 경우가 있다(없는 도구 이름, 스키마 위반).
-          // 여기서 카드를 만들지 않으면 화면에도 세션에도 아무것도 남지 않는다 — 렌더러는
-          // 짝이 맞는 toolCallId만 갱신하므로 뒤따르는 이벤트도 버려진다. 그러면 사용자에게는
-          // 답변이 문장 중간에서 끊긴 것으로만 보이고, 무엇이 실패했는지 알 길이 사라진다.
-          const summary = summarizeCall(part.toolName, (part as { input?: unknown }).input)
-          item = {
+    const startStream = (active: ToolSet | null): ReturnType<typeof streamText> =>
+      streamText({
+        model,
+        system,
+        messages,
+        ...(active ? { tools: active } : {}),
+        stopWhen: [
+          stepCountIs(profile.maxSteps),
+          // 같은 조회만 되풀이하는 턴은 스스로 끝나지 않는다. 차단이 쌓이면 여기서 끊는다.
+          (): boolean => spinning() >= REPEAT_LIMIT
+        ],
+        ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
+        ...(profile.temperature !== undefined ? { temperature: profile.temperature } : {}),
+        abortSignal: abort.signal
+      })
+
+    const consume = async (stream: ReturnType<typeof streamText>): Promise<void> => {
+      for await (const part of stream.fullStream) {
+        if (part.type === 'text-delta') {
+          appendText(part.text)
+          send({ type: 'text-delta', text: part.text })
+        } else if (part.type === 'reasoning-delta') {
+          // 흘려보내기만 한다. 사고는 대화 기록에 쌓지 않는다 — 화면의 "생각 중" 표시를
+          // 실제 내용으로 채우고, 본문 없이 끝났을 때의 진단용 글자 수를 센다.
+          send({ type: 'reasoning-delta', text: part.text })
+          reasoningChars += part.text.length
+        } else if (part.type === 'tool-call') {
+          const summary = summarizeCall(part.toolName, part.input)
+          const item: ChatItem & { kind: 'tool' } = {
             kind: 'tool',
             toolCallId: part.toolCallId,
             toolName: part.toolName,
             summary,
             status: 'running'
           }
+          // 사용자가 이미 거절한 도구를 다시 부르는 중이다. 한 번의 재시도까지만 지나가게 한다.
+          if (declinedTools.has(part.toolName)) refusalSignals += REPEAT_LIMIT
           toolItems.set(part.toolCallId, item)
           newItems.push(item)
+          noteTextBlock()
+          textBlock = null
           send({ type: 'tool-call', toolCallId: part.toolCallId, toolName: part.toolName, summary })
+        } else if (part.type === 'tool-result') {
+          const output = JSON.stringify(part.output)
+          const item = toolItems.get(part.toolCallId)
+          // declined는 문서 처리 확인 흐름이, denied는 권한 게이트가 쓰는 표시다. 둘 다 거절이다 —
+          // declined를 빼먹어 사용자가 취소한 작업이 카드에서 '완료'로 보이고 있었다.
+          const status: 'done' | 'denied' | 'error' =
+            output.includes('"denied":true') || output.includes('"declined":true')
+              ? 'denied'
+              : output.includes('"error":')
+                ? 'error'
+                : 'done'
+          if (item) {
+            item.status = status
+            item.output = output.slice(0, 2000)
+          }
+          if (status === 'denied') {
+            declinedTools.add(item?.toolName ?? part.toolName)
+            refusalSignals++
+          }
+          if (output.includes('"taskId":') && output.includes('"running"')) spawnedTask = true
+          send({ type: 'tool-result', toolCallId: part.toolCallId, status, output: output.slice(0, 2000) })
+        } else if (part.type === 'tool-error') {
+          // 없는 도구 이름이나 스키마에 맞지 않는 인자 — 로컬 모델에서 흔하다.
+          // SDK가 오류를 모델에 되돌려 주므로 대화는 이어지지만, 카드를 확정하고
+          // 실패 신호를 남기지 않으면 '실행 중'으로 굳어 버린다.
+          const message = part.error instanceof Error ? part.error.message : String(part.error)
+          let item = toolItems.get(part.toolCallId)
+          if (!item) {
+            // tool-call 파트 없이 tool-error만 오는 경우가 있다(없는 도구 이름, 스키마 위반).
+            // 여기서 카드를 만들지 않으면 화면에도 세션에도 아무것도 남지 않는다 — 렌더러는
+            // 짝이 맞는 toolCallId만 갱신하므로 뒤따르는 이벤트도 버려진다. 그러면 사용자에게는
+            // 답변이 문장 중간에서 끊긴 것으로만 보이고, 무엇이 실패했는지 알 길이 사라진다.
+            const summary = summarizeCall(part.toolName, (part as { input?: unknown }).input)
+            item = {
+              kind: 'tool',
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              summary,
+              status: 'running'
+            }
+            toolItems.set(part.toolCallId, item)
+            newItems.push(item)
+            send({ type: 'tool-call', toolCallId: part.toolCallId, toolName: part.toolName, summary })
+          }
+          item.status = 'error'
+          item.output = message.slice(0, 2000)
+          ctx.failures.push({ kind: 'tool-error', detail: `${part.toolName} — ${message.slice(0, 200)}` })
+          send({
+            type: 'tool-result',
+            toolCallId: part.toolCallId,
+            status: 'error',
+            output: message.slice(0, 2000)
+          })
+        } else if (part.type === 'finish-step') {
+          if (!firstStepInput) firstStepInput = part.usage?.inputTokens ?? 0
+        } else if (part.type === 'finish') {
+          finishReason = part.finishReason
+        } else if (part.type === 'error') {
+          throw part.error instanceof Error ? part.error : new Error(String(part.error))
         }
-        item.status = 'error'
-        item.output = message.slice(0, 2000)
-        ctx.failures.push({ kind: 'tool-error', detail: `${part.toolName} — ${message.slice(0, 200)}` })
-        send({
-          type: 'tool-result',
-          toolCallId: part.toolCallId,
-          status: 'error',
-          output: message.slice(0, 2000)
-        })
-      } else if (part.type === 'finish-step') {
-        if (!firstStepInput) firstStepInput = part.usage?.inputTokens ?? 0
-      } else if (part.type === 'finish') {
-        finishReason = part.finishReason
-      } else if (part.type === 'error') {
-        throw part.error instanceof Error ? part.error : new Error(String(part.error))
       }
     }
 
+    let result = startStream(tools)
+    await consume(result)
     // 마지막 본문 덩이도 센다 — 턴을 끊기엔 늦지만, 되풀이했다는 사실은 알려야 한다
     noteTextBlock()
 
+    /** 본문도 도구 호출도 없이 끝났는가 — 사용자 눈에는 앱이 아무 일도 안 한 것으로 보인다 */
+    const emptyTurn = (): boolean =>
+      toolItems.size === 0 && !newItems.some((it) => it.kind === 'assistant' && it.text.trim())
+
+    /** 지금까지 끝난 요청들의 사용량 — 한 턴이 여러 요청이 돼도 숫자는 합쳐서 보여준다 */
+    const spent: LanguageModelUsage[] = []
+    const retry = async (text: string, active: ToolSet | null): Promise<void> => {
+      spent.push(await result.totalUsage)
+      appendToSession(sessionId, [{ kind: 'notice', text }], [])
+      send({ type: 'notice', text })
+      finishReason = 'stop'
+      result = startStream(active)
+      await consume(result)
+      noteTextBlock()
+    }
+
+    /*
+     * 빈 턴 복구 — 도구를 줄여 가며 두 번까지 다시 물어본다.
+     *
+     * 트레이스가 좁혀 준 것: 도구 18개를 붙이면 OpenAI가 200을 주면서 본문 0자에
+     * native_finish_reason=max_output_tokens로 1초 만에 끝냈고, 상한을 16,000에서
+     * 64,000으로 올려도 똑같았고, 도구만 빼면 같은 요청이 멀쩡히 답했다. 예산이 아니라
+     * 도구 페이로드가 원인이다.
+     *
+     * 그래서 전부와 전무 사이에 한 칸을 둔다. 핵심 도구만으로 답이 나오면 확인이 필요한
+     * 질문도 살아남는다. 어느 칸에서 나왔는지는 트레이스에 도구 개수로 남아, 다음에
+     * 원인을 좁힐 때 그대로 쓰인다.
+     */
+    const core = Object.fromEntries(
+      Object.entries(tools).filter(([name]) => CORE_TOOL_NAMES.includes(name))
+    )
+    const ladder: { text: string; active: ToolSet | null }[] = [
+      {
+        text:
+          `${config.model}이(가) 도구 ${Object.keys(tools).length}개를 붙인 요청에 빈 응답을 ` +
+          `돌려줬습니다 (종료 사유: ${finishReason}` +
+          `${reasoningChars > 0 ? `, 사고 ${reasoningChars.toLocaleString()}자` : ''}). ` +
+          `핵심 도구 ${Object.keys(core).length}개만 남겨 다시 시도합니다.`,
+        active: core
+      },
+      {
+        text:
+          '핵심 도구만 남겨도 빈 응답이었습니다. 도구 없이 한 번 더 물어봅니다 — ' +
+          '이 답은 파일이나 셸을 확인하지 않은 답입니다.',
+        active: null
+      }
+    ]
+    for (const step of ladder) {
+      if (!emptyTurn() || abort.signal.aborted) break
+      // 이미 그 집합으로 시도했으면 건너뛴다 (도구가 없거나 전부가 핵심인 경우)
+      if (Object.keys(step.active ?? {}).length === Object.keys(tools).length) continue
+      await retry(step.text, step.active)
+    }
+
     // 히스토리 반영 — 디스크 최신 상태에 append (동시 기록 안전)
-    const [response, totalUsage] = await Promise.all([result.response, result.totalUsage])
+    const [response, lastUsage] = await Promise.all([result.response, result.totalUsage])
+    const totalUsage = spent.reduce<LanguageModelUsage>((a, b) => addUsage(a, b), lastUsage)
     // 이 턴 전체(도구 호출 스텝 포함)의 토큰 사용 — 마지막 에이전트 메시지에 귀속시킨다
     const rec = recordUsage(
       { sessionId, kind: 'chat', provider: config.label, model: config.model, tier: 'standard' },
@@ -844,6 +947,10 @@ export async function runTurn(
     // 미해결 도구를 저장 전에 확정한다 — 저장 뒤에 고치면 화면만 바뀌고
     // 디스크에는 '실행 중'인 카드가 영구히 남는다
     const unresolvedIds = resolveDanglingTools(toolItems)
+    // 답이 없었던 턴의 사용자 메시지는 모델 히스토리에서 뺀다. 그대로 두면 다음 질문 때
+    // user 메시지가 연달아 두 개 나가고, 실제로 오늘 세션이 그 상태로 남았다 —
+    // 실패한 턴이 다음 턴까지 나쁘게 만든다. 화면(items)에는 질문이 그대로 남는다.
+    if (emptyTurn() && response.messages.length === 0) dropTrailingUserMessage(sessionId)
     appendToSession(sessionId, newItems, response.messages)
     addSessionUsage(sessionId, usage.input, usage.output)
     send({ type: 'turn-end', unresolvedToolCallIds: unresolvedIds, usage })
@@ -854,8 +961,12 @@ export async function runTurn(
     }
 
     // 깔끔하게 끝나지 않은 턴 — 조용히 두면 사용자는 앱이 답을 하다 만 것으로만 본다
-    const incomplete =
-      refusalSignals >= REPEAT_LIMIT
+    const incomplete = emptyTurn()
+      ? `${config.model}이(가) 본문 없이 응답을 끝냈습니다 (종료 사유: ${finishReason}` +
+        `${reasoningChars > 0 ? `, 사고 ${reasoningChars.toLocaleString()}자` : ''}). ` +
+        '설정 > LLM 프로바이더에서 다른 모델로 바꿔 보세요. ' +
+        '원인을 보려면 DA_LLM_TRACE=1로 앱을 실행하면 요청과 응답이 data/llm-trace.jsonl에 남습니다.'
+      : refusalSignals >= REPEAT_LIMIT
         ? '취소하신 작업을 다시 시도해서 멈췄습니다. 무엇을 원하시는지 알려 주세요.'
         : spinning() >= REPEAT_LIMIT
           ? '같은 내용을 되풀이하기만 해서 중간에 멈췄습니다. 무엇을 확인해야 하는지 좁혀서 다시 물어봐 주세요.'

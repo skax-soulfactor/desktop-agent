@@ -144,3 +144,19 @@ export function appendToSession(id: string, items: ChatItem[], messages: ModelMe
   fresh.messages.push(...messages)
   saveSession(fresh)
 }
+
+/**
+ * 마지막 사용자 메시지를 모델 히스토리에서 뺀다 (화면 기록 items는 건드리지 않는다).
+ *
+ * 답이 없이 끝난 턴을 위한 것이다. 답하지 못한 질문을 히스토리에 남겨 두면 다음 질문 때
+ * user 메시지가 연달아 두 개 나가는데, 그 모양을 싫어하는 프로바이더가 있어 실패한 턴이
+ * 다음 턴까지 끌고 들어간다. 사용자에게는 질문이 그대로 보여야 하므로 items는 남긴다.
+ */
+export function dropTrailingUserMessage(id: string): void {
+  const fresh = getSession(id)
+  if (!fresh) return
+  const last = fresh.messages[fresh.messages.length - 1]
+  if (!last || last.role !== 'user') return
+  fresh.messages.pop()
+  saveSession(fresh)
+}
