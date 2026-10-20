@@ -14,6 +14,8 @@ import type {
   MemoryEntry,
   MemoryReviewItem,
   MemoryStats,
+  ModelInfo,
+  ModelListRequest,
   ModelTier,
   NetworkConfig,
   NotificationActivation,
@@ -78,6 +80,8 @@ export interface DesktopAgentApi {
   saveProvider(config: ProviderConfig, apiKey?: string): Promise<void>
   deleteProvider(id: string): Promise<void>
   setTier(tier: ModelTier, providerId: string | null): Promise<void>
+  /** 프로바이더가 제공하는 모델 목록 — 키는 폼 입력값 또는 저장된 키를 쓴다 */
+  listModels(req: ModelListRequest): Promise<ModelInfo[]>
 
   listRules(): Promise<PermissionRule[]>
   deleteRule(id: string): Promise<void>

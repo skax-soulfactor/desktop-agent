@@ -596,6 +596,27 @@ body.resizing * { cursor: col-resize !important; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grid-form { display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: center; }
 
+/* 설정 — 프로바이더 모델 검색·선택 콤보박스 */
+.model-picker { min-width: 0; }
+.model-picker-field { position: relative; }
+.model-picker .row { flex-wrap: nowrap; }
+.model-picker-list {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 20;
+  max-height: 280px; overflow-y: auto; margin-top: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); padding: 4px;
+}
+.model-picker-item {
+  display: flex; gap: 10px; align-items: baseline; padding: 6px 8px;
+  border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.model-picker-item.active { background: var(--panel-3); }
+.model-picker-item.selected .model-picker-id { color: var(--accent); }
+.model-picker-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker-meta { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+.model-picker-empty { color: var(--text-dim); font-size: 12px; padding: 6px 8px; }
+.model-picker-status { color: var(--text-dim); font-size: 12px; margin-top: 6px; min-height: 18px; }
+
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--text-dim); font-weight: 500; }

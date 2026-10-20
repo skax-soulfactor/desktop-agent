@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import UpdateSection from './UpdateSection'
+import ModelPicker from './ModelPicker'
 import type {
   AuditRecord,
   McpServerConfig,
@@ -303,12 +304,6 @@ export default function SettingsView(): JSX.Element {
           value={form.label}
           onChange={(e) => setForm({ ...form, label: e.target.value })}
         />
-        <span>모델</span>
-        <input
-          placeholder={form.type === 'openai-compatible' ? '모델 ID (예: OpenRouter는 vendor/model 형식)' : ''}
-          value={form.model}
-          onChange={(e) => setForm({ ...form, model: e.target.value })}
-        />
         {needsBaseURL && (
           <>
             <span>Base URL</span>
@@ -353,6 +348,17 @@ export default function SettingsView(): JSX.Element {
             />
           </>
         )}
+        {/* 모델 목록은 Base URL·API 키로 조회하므로 그 아래에 둔다 */}
+        <span>모델</span>
+        <ModelPicker
+          providerId={editingExisting ? form.id : undefined}
+          type={form.type}
+          baseURL={form.baseURL}
+          apiKey={needsKey ? form.apiKey : undefined}
+          hasStoredKey={providers.some((p) => p.id === form.id && p.hasKey)}
+          value={form.model}
+          onChange={(model) => setForm((f) => ({ ...f, model }))}
+        />
         <span />
         <div className="row">
           <button className="primary" onClick={() => void save()}>
