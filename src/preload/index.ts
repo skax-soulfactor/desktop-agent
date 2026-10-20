@@ -14,6 +14,8 @@ import type {
   MemoryEntry,
   MemoryReviewItem,
   MemoryStats,
+  ModelInfo,
+  ModelListRequest,
   ModelTier,
   NetworkConfig,
   NotificationActivation,
@@ -89,6 +91,8 @@ const api: DesktopAgentApi = {
   deleteProvider: (id: string): Promise<void> => ipcRenderer.invoke('providers:delete', id),
   setTier: (tier: ModelTier, providerId: string | null): Promise<void> =>
     ipcRenderer.invoke('providers:setTier', tier, providerId),
+  listModels: (req: ModelListRequest): Promise<ModelInfo[]> =>
+    ipcRenderer.invoke('providers:listModels', req),
 
   listRules: (): Promise<PermissionRule[]> => ipcRenderer.invoke('rules:list'),
   deleteRule: (id: string): Promise<void> => ipcRenderer.invoke('rules:delete', id),

@@ -104,7 +104,7 @@ const PROBE_TTL_MS = 30_000
 const PROBE_MISS_TTL_MS = 3_000
 
 /** OpenAI 호환 baseURL(.../v1)에서 Ollama 네이티브 API의 루트를 얻는다 */
-function ollamaRoot(baseURL: string): string {
+export function ollamaRoot(baseURL: string): string {
   return baseURL.trim().replace(/\/+$/, '').replace(/\/v1$/, '')
 }
 

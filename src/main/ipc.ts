@@ -1,6 +1,6 @@
 import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 import { readFileSync, writeFileSync } from 'fs'
-import type { ApprovalDecision, AttachmentPayload, ProviderConfig } from '@shared/types'
+import type { ApprovalDecision, AttachmentPayload, ModelListRequest, ProviderConfig } from '@shared/types'
 import { runTurn, abortTurn, turnStartedAt, currentMemoryBudget } from './agent/loop'
 import { listTasks, cancelTask } from './agent/tasks'
 import { respondClarify, pendingClarifications } from './agent/clarify'
@@ -18,6 +18,7 @@ import { listRules, deleteRule } from './permissions/policies'
 import { listAudit } from './permissions/audit'
 import { isElevationEnabled, setElevationEnabled } from './permissions/elevation'
 import { listProviders, saveProvider, deleteProvider, setTier } from './llm/providers'
+import { listModels } from './llm/models'
 import type { ModelTier } from '@shared/types'
 import {
   listMemories,
@@ -122,6 +123,7 @@ export function registerIpc(getWin: () => BrowserWindow): void {
   ipcMain.handle('providers:setTier', (_e, tier: ModelTier, providerId: string | null) =>
     setTier(tier, providerId)
   )
+  ipcMain.handle('providers:listModels', (_e, req: ModelListRequest) => listModels(req))
 
   // 권한 규칙 / 감사 로그
   ipcMain.handle('rules:list', () => listRules())

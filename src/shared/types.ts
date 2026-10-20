@@ -24,6 +24,25 @@ export interface ProviderConfig {
   hasKey?: boolean
 }
 
+/** 프로바이더가 제공하는 모델 목록 조회 요청 — 저장 전 폼 값으로 바로 조회한다 */
+export interface ModelListRequest {
+  /** 이미 저장된 프로바이더면 키체인의 키를 쓰기 위해 넘긴다 */
+  id?: string
+  type: ProviderType
+  baseURL?: string
+  /** 폼에 새로 입력한 키. 비어 있으면 id로 저장된 키를 쓴다 */
+  apiKey?: string
+}
+
+/** 프로바이더가 알려 준 모델 한 개 */
+export interface ModelInfo {
+  id: string
+  /** 사람이 읽는 이름 — 프로바이더가 줄 때만 */
+  name?: string
+  /** 프로바이더가 알려 준 최대 컨텍스트 (참고용) */
+  contextLength?: number
+}
+
 export interface SessionMeta {
   id: string
   title: string

@@ -53,7 +53,7 @@ function storeKey(providerId: string, apiKey: string): void {
   saveKeys(keys)
 }
 
-function getKey(providerId: string): string | null {
+export function getKey(providerId: string): string | null {
   const stored = loadKeys()[providerId]
   if (!stored) return null
   if (stored.startsWith('enc:')) {
