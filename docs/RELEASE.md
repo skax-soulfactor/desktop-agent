@@ -5,7 +5,7 @@
 | 항목 | 방식 |
 | --- | --- |
 | 패키징 | [electron-builder](https://www.electron.build/) — 설정: [electron-builder.yml](../electron-builder.yml) |
-| 배포 채널 | GitHub Releases ([skax-soulfactor/desktop-agent](https://github.com/skax-soulfactor/desktop-agent/releases)) |
+| 배포 채널 | GitHub Releases ([soulfactorx/desktop-agent](https://github.com/soulfactorx/desktop-agent/releases)) |
 | CI | GitHub Actions — `v*` 태그 푸시 시 3개 OS에서 빌드·업로드 ([release.yml](../.github/workflows/release.yml)) |
 | 자동 업데이트 | electron-updater — 실행 시 + 4시간마다 Releases 확인 ([src/main/index.ts](../src/main/index.ts)) |
 
@@ -54,7 +54,7 @@ git push --follow-tags   # 태그가 푸시되면 CI가 자동 실행
 별도 시크릿 설정은 필요 없다 — 기본 제공되는 `GITHUB_TOKEN`으로 업로드한다
 (워크플로에 `permissions: contents: write` 선언됨).
 
-신규 사용자는 [Releases 페이지](https://github.com/skax-soulfactor/desktop-agent/releases)에서
+신규 사용자는 [Releases 페이지](https://github.com/soulfactorx/desktop-agent/releases)에서
 자기 OS용 파일을 내려받아 설치한다.
 
 ## 자동 업데이트 동작 방식
