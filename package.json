@@ -2,7 +2,7 @@
   "name": "desktop-agent",
   "version": "0.1.33",
   "description": "Cross-platform desktop agent with permission-gated tools and a local knowledge base",
-  "author": "skax-soulfactor",
+  "author": "soulfactorx",
   "license": "MIT",
   "main": "./out/main/index.js",
   "private": true,
